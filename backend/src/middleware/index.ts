@@ -11,6 +11,7 @@ export { requestLogger } from "./logging.js";
 export { errorHandler } from "./errorHandler.js";
 export {
   auditMiddleware,
+  auditLog,
   redactPii,
   redactBody,
   appendAudit,
@@ -37,7 +38,6 @@ export {
   claimLimiter,
 } from "./rateLimit.js";
 export { validateBody, validateQuery, validateParams } from "./validate.js";
-export { auditLog } from "./audit.js";
 export {
   degradationContext,
   noteDegraded,
