@@ -1806,11 +1806,9 @@ export function getEventsForDao(
   const validLimit = Math.max(1, Math.min(limit, 1000));
   const validOffset = Math.max(0, offset);
 
-  // SECURITY: Validate ORDER BY parameters
-  const { column: orderColumn, direction } = validateOrderBy(
-    orderBy,
-    orderDirection,
-  );
+  // SECURITY: Validate filters before returning early or compiling a query.
+  if (types && types.length > 0) validateEventTypes(types);
+  const { column: orderColumn, direction } = validateOrderBy(orderBy, orderDirection);
 
   let query = kysely
     .selectFrom(sql<any>`${sql.raw(tableName)}`.as("events"))
@@ -3432,6 +3430,9 @@ export function storeVoteReceipt(
 ): void {
   const database = getWriteDb();
   try {
+    database
+      .prepare("INSERT OR IGNORE INTO daos (id, name, creator) VALUES (?, ?, ?)")
+      .run(daoId, `DAO ${daoId}`, "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
     database
       .prepare(
         `INSERT INTO vote_receipts (nullifier, tx_hash, proposal_id, dao_id, status)

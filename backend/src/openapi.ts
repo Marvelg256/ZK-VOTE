@@ -4,6 +4,15 @@
  * Scope: middleware/audit.ts, routes/*, openapi.ts
  */
 
+import { z } from "zod";
+
+export const daosListResponseSchema = z.object({
+  data: z.array(z.object({ id: z.number() }).passthrough()),
+  pagination: z.object({ total: z.number(), hasMore: z.boolean(), cursor: z.string().optional() }),
+  lastSync: z.unknown().optional(),
+  cached: z.boolean(),
+});
+
 export const openApiSpec = {
   openapi: "3.0.3",
   info: {

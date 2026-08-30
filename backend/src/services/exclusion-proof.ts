@@ -49,7 +49,7 @@ export async function verifyExclusionProof(
   }
 }
 
-function checkRevocationStatus(commitment: string, daoId: number): RevocationStatus {
+function ensureRevocationsTable(): ReturnType<typeof getDb> {
   const db = getDb();
   db.exec(`
     CREATE TABLE IF NOT EXISTS member_revocations (
@@ -61,6 +61,11 @@ function checkRevocationStatus(commitment: string, daoId: number): RevocationSta
       PRIMARY KEY (commitment, dao_id)
     )
   `);
+  return db;
+}
+
+function checkRevocationStatus(commitment: string, daoId: number): RevocationStatus {
+  const db = ensureRevocationsTable();
   const row = db
     .prepare(
       "SELECT revoked_at, reinstated_at FROM member_revocations WHERE commitment = ? AND dao_id = ?",
@@ -89,8 +94,7 @@ export async function recordRevocation(
   daoId: number,
   timestamp: number,
 ): Promise<void> {
-  const db = getDb();
-  db.exec(`CREATE TABLE IF NOT EXISTS member_revocations (commitment TEXT NOT NULL, dao_id INTEGER NOT NULL, revoked_at INTEGER NOT NULL, reinstated_at INTEGER, created_at TEXT NOT NULL, PRIMARY KEY (commitment, dao_id))`);
+  const db = ensureRevocationsTable();
   db.prepare(
       "INSERT OR REPLACE INTO member_revocations (commitment, dao_id, revoked_at, created_at) VALUES (?, ?, ?, ?)",
     )
@@ -102,8 +106,7 @@ export async function recordReinstatement(
   daoId: number,
   timestamp: number,
 ): Promise<void> {
-  const db = getDb();
-  db.exec(`CREATE TABLE IF NOT EXISTS member_revocations (commitment TEXT NOT NULL, dao_id INTEGER NOT NULL, revoked_at INTEGER NOT NULL, reinstated_at INTEGER, created_at TEXT NOT NULL, PRIMARY KEY (commitment, dao_id))`);
+  const db = ensureRevocationsTable();
   db.prepare(
       "UPDATE member_revocations SET reinstated_at = ? WHERE commitment = ? AND dao_id = ?",
     )
