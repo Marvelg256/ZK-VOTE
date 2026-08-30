@@ -165,6 +165,8 @@ jobs:
         run: npm ci
       - name: Run tests
         run: npm test
+      - name: Run Soroban BE conversion parity tests (#369)
+        run: npm run test:parity
       - name: Compile v2 circuits (if available)
         run: |
           if command -v circom &> /dev/null; then
