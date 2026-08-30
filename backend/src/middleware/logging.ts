@@ -13,15 +13,20 @@ declare global {
     interface Request {
       ctx?: string;
       traceId?: string;
+      spanId?: string;
     }
   }
 }
 import crypto from "crypto";
 // import { config } from "../config.js"; // Unused - kept for reference
 import { log, hashIp, getRedactionPolicy } from "../services/logger.js";
-
-const TRACEPARENT_RE =
-  /^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/i;
+import {
+  createSpanContext,
+  formatTraceparent,
+  parseTraceparent,
+  runWithSpanContext,
+  type SpanContext,
+} from "../services/tracing.js";
 
 /**
  * Parses an inbound W3C `traceparent` header (version-traceid-parentid-flags,
@@ -31,13 +36,7 @@ const TRACEPARENT_RE =
 export function parseIncomingTraceId(
   header: string | undefined,
 ): string | undefined {
-  if (!header) return undefined;
-  const match = TRACEPARENT_RE.exec(header.trim());
-  if (!match) return undefined;
-  const traceId = match[2];
-  // An all-zero trace ID is explicitly invalid per the spec.
-  if (/^0+$/.test(traceId)) return undefined;
-  return traceId;
+  return parseTraceparent(header)?.traceId;
 }
 
 /**
@@ -55,12 +54,16 @@ export function requestLogger(
   // W3C Trace Context (#141): continue an inbound trace ID when present so
   // this request can be correlated across services, otherwise start a new
   // trace. The span ID always identifies this hop.
-  const traceId =
-    parseIncomingTraceId(req.get("traceparent")) ||
-    crypto.randomBytes(16).toString("hex");
-  const spanId = crypto.randomBytes(8).toString("hex");
-  req.traceId = traceId;
-  res.setHeader("traceparent", `00-${traceId}-${spanId}-01`);
+  //
+  // The context is also installed as ambient for the rest of the chain (#321),
+  // which is what lets a database write or a Soroban RPC call opened deep
+  // inside a handler attach itself to this request's trace without every
+  // intervening signature having to carry a context argument.
+  const inbound = parseTraceparent(req.get("traceparent"));
+  const spanContext: SpanContext = createSpanContext(inbound);
+  req.traceId = spanContext.traceId;
+  req.spanId = spanContext.spanId;
+  res.setHeader("traceparent", formatTraceparent(spanContext));
 
   // Build IP meta based on configuration
   const policy = getRedactionPolicy();
@@ -80,7 +83,7 @@ export function requestLogger(
 
   log("info", "request_start", {
     ctx,
-    traceId,
+    traceId: spanContext.traceId,
     path: req.path,
     method: req.method,
     ...ipMeta,
@@ -91,13 +94,13 @@ export function requestLogger(
   res.on("finish", () => {
     log("info", "request_end", {
       ctx,
-      traceId,
+      traceId: spanContext.traceId,
       path: req.path,
       status: res.statusCode,
     });
   });
 
-  next();
+  runWithSpanContext(spanContext, next);
 }
 
 /**
