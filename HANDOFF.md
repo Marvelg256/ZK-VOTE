@@ -33,10 +33,10 @@ each of the four issues.
 
 | Issue | Status | Branch | Notes |
 |-------|--------|--------|-------|
-| #369 | DONE — awaiting review/commit | `feat/369-soroban-be-parity-tests` | 21 new tests, fixed vectors, CI step, mutation-verified |
-| #358 | TODO | — | ... |
+| #369 | DONE — committed, awaiting review | `feat/369-soroban-be-parity-tests` | 21 new tests, fixed vectors, CI step, mutation-verified |
+| #358 | M1 DONE — in review | `feat/358-backend-di-refactor` | composition root + interfaces + factories; repaired merge-corrupted backend boot |
 | #326 | TODO | — | ZK-091: NO reference found in repo (see below) |
-| #325 | TODO | — | `circuits/claim.circom` ALREADY EXISTS in repo |
+| #325 | TODO | — | `circuits/claim.circom` ALREADY EXISTS; claim route already implemented (thin flow) |
 
 ---
 
@@ -140,14 +140,113 @@ each of the four issues.
 
 ---
 
-## Issue #358 — Backend service-layer DI (not started)
+## Issue #358 — Backend service-layer DI
 
-Key repo facts for the future session:
-- `backend/src/services/*` exists; `index.ts`/`config.ts` at `backend/src/`.
-- CI backend job sets `RELAYER_TEST_MODE=true`, a `SCZAN...` test secret, and
-  placeholder contract IDs — test env pattern to reuse.
-- Need to read `backend/src/services/*` in full, map globals/singletons,
-  design interfaces, introduce composition root.
+**Status: MILESTONE 1 (foundation) DONE, in review. Follow-up milestones below.**
+
+### Session 1 deliverable (committed on `feat/358-backend-di-refactor`)
+- **NEW `backend/src/services/interfaces.ts`** — typed dependency surfaces:
+  `RpcServerPort`, `RpcPoolPort`, `RpcEndpointStatus`, `StellarContext`,
+  `DbPort`, `LoggerPort`, `MetricsSink`. Structural types → mocks satisfy them.
+- **NEW `backend/src/composition-root.ts`** — `buildAppServices()`: the single
+  construction site. Builds the `StellarContext` (server, keypair, sequence
+  lock, timeouts) and calls `initCircuitRegistry(...)` with explicit deps.
+  `index.ts` calls it after `validateEnv()`.
+- **`stellar.ts` refactored** — extracted factories:
+  `createRelayerKeypair(secret, testMode)`, `createRpcPool(urls, {fallbackUrl,
+  serverFactory})`, `createSorobanServer({testMode, pool, breaker})`.
+  `RpcPoolManager` now accepts an injectable server factory + fallback URL
+  (testable without a live RPC). Module singletons now delegate to the
+  factories.
+- **`circuit-registry.ts` refactored** — `initCircuitRegistry(deps)` +
+  `CircuitRegistryDeps`; the service no longer imports `stellar.js` globals.
+  Throws if used before init (no silent global fallback).
+- **`index.ts` wired** — uses `services.stellar.*` for health-route init,
+  graceful shutdown drain, indexer start, startup log; removed the direct
+  `stellar.js` import. **Also repaired the pre-existing merge corruption that
+  made `index.ts` fail to parse** (see below).
+- **NEW unit tests with mocks** — `test/di/circuit-registry.test.ts` (6) +
+  `test/di/rpc-pool.test.ts` (8): injected mock servers/keypairs, no live RPC.
+  All 14 PASS.
+
+### Pre-existing backend breakage repaired along the way (merge corruption at HEAD 746e98fa)
+`index.ts` did NOT parse on main (`tsc` error TS1128 at line 348; brace balance
+-1). Root cause: the `feat/unified-advanced-features` merge corrupted index.ts,
+config.ts and middleware. Repairs made (all verified to preserve intent vs.
+pre-merge git history):
+1. **index.ts gracefulShutdown** — duplicated startup-banner block removed;
+   restored `drained = await waitForSequenceLockIdle(...)`,
+   `closeDb()`, and the sequence-lock-drain log (from commit 940bc9ab).
+2. **index.ts missing imports restored** — `metricsMiddleware`,
+   `degradationContext`, `metricsRoutes`, `remediationRoutes`,
+   `registerShutdownHandler` were referenced but never imported.
+3. **index.ts `/openapi.json` + `/api-docs` routes restored**; removed bogus
+   `import { buildOpenApiDocument }` (openapi.ts exports `openApiSpec`).
+4. **middleware/index.ts** — removed the `export { auditLog }` re-export of an
+   internal (non-exported) array.
+5. **middleware/audit.ts** — restored the `auditLog(action)` middleware factory
+   that `routes/daos.ts` + `routes/threshold.ts` import (the audit rewrite
+   replaced it with the global `auditMiddleware`); renamed the internal array
+   to `auditStore`.
+6. **config.ts validateEnv** — restored the `missing` array (was `missing is
+   not defined` at runtime) and made `AUTH_MASTER_KEY` non-required in test
+   mode (pre-corruption didn't require it at all).
+
+**Verified:** backend **boots** in test mode (`/health` returns full payload;
+`/openapi.json` serves spec). `tsc --noEmit`: my files contribute ZERO errors
+(remaining ~21 errors are pre-existing on main: `config.ts` rewardsContractId,
+`claim.ts`, `exclusion-proof.ts`, unused imports in index.ts).
+
+### Full-suite triage after repair (DONE, conclusive)
+- **Corrupted baseline** (main @ 746e98fa): 295 pass / 89 fail — but the app
+  did NOT load, so dozens of test FILES crashed at file level (import
+  cascade); their subtests never ran.
+- **After repair + DI refactor** (`npm test`, includes `test/di/*`):
+  476 pass / 94 fail (584 total).
+- **Failures diffed against baseline**: only **15** failure NAMES are new,
+  and every one of them lives in test files that were file-level crash
+  failures in baseline (`route-branches`, `route-coverage`, `vote-integration`,
+  `vote-outcomes`, ipfs/comments/daos boundary tests). They are latent
+  pre-existing test-vs-behavior mismatches now exposed by the boot fix — the
+  dominant pattern is **52 `403 !== X`** (CSRF guard blocks POSTs without
+  Origin/Referer BEFORE auth returns 401/400 — confirmed the csrfGuard mount
+  order is byte-identical to pre-corruption commit 9290e9e1, CAS is unchanged).
+- **CONCLUSION: the #358 refactor introduces ZERO regressions.** The remaining
+  failures are pre-existing backend bugs (CSRF test ordering, circuit-status
+  200-vs-400 route logic, IPFS boundary assertions) to be triaged as separate
+  follow-up work, NOT part of #358's DI scope.
+
+### Dependency map (from full read of `backend/src/services/*`)
+Core surfaces consumed: `config` (~15 svcs), `logger` (~25), `db` (~10),
+`stellar` (~7), `metrics` (~7).
+- `db.ts` → dbMonitor, kysely, migrate, walResilience, config, logger
+- `kysely.ts` → db (CIRCULAR: db↔kysely — resolve via DI when migrating)
+- `stellar.ts` → circuit-breaker, cluster, config, db, logger, metrics
+- `sync.ts` → config, db, indexer, logger, metrics, service-health, stellar
+- `sbt-guard.ts` → config, db, logger, service-health, stellar
+- `ttl.ts` → config, db, logger, service-health, stellar, ttl-checker
+- `bridge.ts` → config, logger, stellar
+- `circuit-registry.ts` → config, logger, stellar  ✅ REFACTORED
+- Module-level `let` singleton state (grep): ipfs, pow, cluster, dbWorker,
+  db, ipfs-pin-manager, indexer-tracing, archival, memory-monitor,
+  walResilience, audit, remediation, ttl, dbMonitor, circuit-registry cache.
+
+### Follow-up milestones (next sessions)
+- [ ] M2: migrate `ttl.ts` (has an existing `TTLSubmitter` setter precedent —
+      formalize with `initTtlService(deps)`), `bridge.ts` service (currently
+      dead code — no consumers; the bridge ROUTE inlines its own logic),
+      `anti-spam.ts`, `sbt-guard.ts`, `sync.ts` to the same init-injection
+      pattern.
+- [ ] M3: `db.ts` factory (`createEventDb({metrics, config})`) to break the
+      db↔kysely cycle; move `getDb()` behind `DbPort`.
+- [ ] M4: `ttl.ts`/`sync.ts`/`indexer.ts` timer services — inject interval
+      factories for deterministic tests (fake timers).
+- [ ] M5: sweep — grep for remaining `let ` singletons; confirm no service
+      imports `stellar.js`/`db.js` directly; each migrated service has a
+      mock-based unit test.
+- [ ] NOTE for #325: the claim route (routes/claim.ts) currently imports
+      `stellar.js` globals directly — rewrite it against `StellarContext`
+      from the composition root when #325 lands.
 
 ---
 
