@@ -289,7 +289,7 @@ async function gracefulShutdown(reason: string): Promise<void> {
     });
   });
 
-  stopBackgroundServices();
+  await stopBackgroundServices();
   stopAuthScheduler();
   stopWalResilience();
   log("info", "shutdown_component_stopped", {
@@ -468,13 +468,21 @@ async function startBackgroundServices(): Promise<void> {
   });
 }
 
-function stopBackgroundServices(): void {
+/**
+ * Stop every background loop.
+ *
+ * Awaits the indexer specifically: its scheduler cancels an in-flight poll
+ * cycle and closes the database only once that cycle has unwound (#323), so a
+ * shutdown that did not await it could close the HTTP server while a poll was
+ * still writing.
+ */
+async function stopBackgroundServices(): Promise<void> {
   if (!backgroundServicesStarted) return;
   backgroundServicesStarted = false;
 
   log("info", "stopping_background_services", { pid: process.pid });
 
-  stopIndexer();
+  await stopIndexer();
   stopDaoSync();
   stopMembershipSync();
   stopTTLRenewal();
@@ -564,7 +572,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
             log("info", "worker_demoted_stopping_background_services", {
               pid: process.pid,
             });
-            stopBackgroundServices();
+            await stopBackgroundServices();
           }
         });
 

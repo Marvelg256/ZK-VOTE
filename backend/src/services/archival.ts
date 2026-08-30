@@ -21,6 +21,8 @@ import { type Database as DatabaseType } from "better-sqlite3";
 import { getDb } from "./db.js";
 import { log } from "./logger.js";
 import { config } from "../config.js";
+import { WatermarkScheduler } from "./indexer-scheduler.js";
+import { archivalRunsTotal, archivalDuration } from "./metrics.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -98,6 +100,12 @@ export async function runArchivalJob(
     ageDays?: number;
     archiveDir?: string;
     batchSize?: number;
+    /**
+     * Aborts the job between DAO partitions and between delete batches (#323).
+     * Archival can run for minutes over a large database; without this a
+     * shutdown would either block on it or leave a half-deleted partition.
+     */
+    signal?: AbortSignal;
   } = {},
 ): Promise<ArchivalJobResult> {
   const db = getDb();
@@ -126,6 +134,15 @@ export async function runArchivalJob(
   ).toISOString();
   const targetDir = options.archiveDir || ensureArchiveDir();
   const batchSize = options.batchSize || 100;
+  const signal = options.signal;
+
+  /** Abort at a point where the database is in a consistent state. */
+  const throwIfAborted = (): void => {
+    if (!signal?.aborted) return;
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new Error("Archival job cancelled");
+  };
 
   log("info", "archival_job_start", { ageDays, cutoffDate, dbSizeBytesBefore });
 
@@ -140,6 +157,7 @@ export async function runArchivalJob(
     const createdRecords: ArchiveRecord[] = [];
 
     for (const daoId of registeredDaos) {
+      throwIfAborted();
       const tableName = `events_${daoId}`;
       const tableExists = db
         .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
@@ -245,6 +263,7 @@ export async function runArchivalJob(
       // Step 3: Batch deletion of archived events from SQLite database
       const eventIds = eventsToArchive.map((e) => e.id);
       for (let i = 0; i < eventIds.length; i += batchSize) {
+        throwIfAborted();
         const batch = eventIds.slice(i, i + batchSize);
         const placeholders = batch.map(() => "?").join(",");
         db.prepare(
@@ -282,7 +301,11 @@ export async function runArchivalJob(
     };
   } catch (err) {
     const errorMsg = (err as Error).message;
-    log("error", "archival_job_failed", { error: errorMsg });
+    const cancelled = signal?.aborted === true;
+    log(cancelled ? "info" : "error", cancelled ? "archival_job_cancelled" : "archival_job_failed", {
+      error: errorMsg,
+      archivedEventsCount: totalArchivedCount,
+    });
     return {
       success: false,
       archivedEventsCount: 0,
