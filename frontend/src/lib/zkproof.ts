@@ -597,35 +597,6 @@ export async function generateCommentProof(
 ): Promise<GeneratedProof> {
   try {
     const circuitVersion = input.circuitVersion ?? "v1";
-    let circuitInput: Record<string, unknown>;
-    if (circuitVersion === "v2") {
-      circuitInput = {
-        root: input.root,
-        nullifier: input.nullifier,
-        daoId: input.daoId,
-        proposalId: input.proposalId,
-        commentNonce: input.commentNonce,
-        commitment: input.commitment,
-        parentCommentId: input.parentCommentId ?? "0",
-        secret: input.secret,
-        salt: input.salt,
-        pathElements: input.pathElements,
-        pathIndices: input.pathIndices,
-      };
-    } else {
-      circuitInput = {
-        root: input.root,
-        nullifier: input.nullifier,
-        daoId: input.daoId,
-        proposalId: input.proposalId,
-        commentNonce: input.commentNonce,
-        commitment: input.commitment,
-        secret: input.secret,
-        salt: input.salt,
-        pathElements: input.pathElements,
-        pathIndices: input.pathIndices,
-      };
-    }
 
     let circuitInput: CircuitSignals;
 
