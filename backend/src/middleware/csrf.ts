@@ -95,9 +95,14 @@ export function csrfGuard(
     }
   }
 
-  // Security hardening #4: CSRF token validation as defense-in-depth
-  // Validate X-CSRF-Token header for state-changing requests
+  // Security hardening #4: CSRF token validation as defense-in-depth.
+  // Server-to-server callers authenticated by the relayer guard do not have
+  // browser cookies and are not exposed to browser CSRF, so allow them when
+  // no browser origin headers are present.
   const csrfToken = req.headers["x-csrf-token"] as string;
+  if (!requestOrigin && req.headers["x-relayer-auth"]) {
+    return next();
+  }
   if (!csrfToken || !validateCsrfToken(csrfToken, req)) {
     log("warn", "csrf_invalid_token", {
       path: req.path,

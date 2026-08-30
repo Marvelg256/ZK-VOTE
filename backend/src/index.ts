@@ -10,9 +10,8 @@ import cluster from "node:cluster";
 import express, { type Express } from "express";
 import cors from "cors";
 import helmet from "helmet";
-import swaggerUi from "swagger-ui-express";
-
-import { buildOpenApiDocument } from "./openapi.js";
+import { registerShutdownHandler } from "./routes/admin.js";
+import { initializeTelemetry } from "./services/otel.js";
 
 // Configuration and types
 import { config, validateEnv, isValidContractId } from "./config.js";
@@ -74,7 +73,14 @@ import {
 import { closeDb } from "./services/db.js";
 
 // Middleware
-import { csrfGuard, requestLogger, errorHandler, auditMiddleware } from "./middleware/index.js";
+import {
+  csrfGuard,
+  requestLogger,
+  errorHandler,
+  auditMiddleware,
+  degradationContext,
+  metricsMiddleware,
+} from "./middleware/index.js";
 
 // Routes
 import {
@@ -91,6 +97,7 @@ import {
   circuitRoutes,
   auditRoutes,
   remediationRoutes,
+  metricsRoutes,
 } from "./routes/index.js";
 import openApiSpec from "./openapi.js";
 
@@ -99,6 +106,7 @@ import openApiSpec from "./openapi.js";
 // ============================================
 
 validateEnv();
+initializeTelemetry();
 
 // ============================================
 // EXPRESS APP SETUP

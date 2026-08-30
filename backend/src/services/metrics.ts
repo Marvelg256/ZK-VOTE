@@ -334,6 +334,90 @@ export const indexerOverrunSkips = new Counter({
 });
 
 // ============================================
+// ZK PROOF METRICS
+// ============================================
+
+/**
+ * Histogram of ZK proof verification duration in seconds.
+ * Tracks how long local (off-chain) proof validation takes before relaying.
+ */
+export const proofVerificationDuration = new Histogram({
+  name: "zkvote_proof_verification_duration_seconds",
+  help: "Duration of ZK proof verification in seconds",
+  labelNames: ["dao_id", "result"] as const,
+  buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+  registers: [register],
+});
+
+/**
+ * Total number of proof validation errors, labelled by error kind.
+ * Error kinds: invalid_format | field_out_of_range | stale_root | double_spend | other
+ */
+export const proofValidationErrors = new Counter({
+  name: "zkvote_proof_validation_errors_total",
+  help: "Total ZK proof validation errors",
+  labelNames: ["error_kind"] as const,
+  registers: [register],
+});
+
+/**
+ * Total number of proof submissions, labelled by result (accepted | rejected).
+ */
+export const proofSubmissionsTotal = new Counter({
+  name: "zkvote_proof_submissions_total",
+  help: "Total ZK proof submissions received by the relayer",
+  labelNames: ["result"] as const,
+  registers: [register],
+});
+
+// ============================================
+// RELAYER BUSINESS METRICS
+// ============================================
+
+/**
+ * Total relay attempts (submit-to-chain operations), labelled by status.
+ * Status: success | failed | simfail | timeout
+ */
+export const relayAttemptsTotal = new Counter({
+  name: "zkvote_relay_attempts_total",
+  help: "Total relay (submit-to-Stellar) attempts",
+  labelNames: ["status"] as const,
+  registers: [register],
+});
+
+/**
+ * Duration of a complete relay operation (simulate → submit → confirm).
+ */
+export const relayDuration = new Histogram({
+  name: "zkvote_relay_duration_seconds",
+  help: "End-to-end relay operation duration in seconds",
+  labelNames: ["status"] as const,
+  buckets: [0.1, 0.5, 1, 2, 5, 10, 20, 30, 60],
+  registers: [register],
+});
+
+/**
+ * Total relay errors classified by error type.
+ * Error types: simulation | submission | timeout | sequence_lock | rpc_error | other
+ */
+export const relayErrors = new Counter({
+  name: "zkvote_relay_errors_total",
+  help: "Total relay errors by type",
+  labelNames: ["error_type"] as const,
+  registers: [register],
+});
+
+/**
+ * Current depth of the pending-relay queue (for backpressure visibility).
+ * Decrements when a relay is confirmed or definitively rejected.
+ */
+export const relayQueueDepth = new Gauge({
+  name: "zkvote_relay_queue_depth",
+  help: "Current number of vote submissions in flight (sequence-locked)",
+  registers: [register],
+});
+
+// ============================================
 // CIRCUIT BREAKER METRICS
 // ============================================
 
