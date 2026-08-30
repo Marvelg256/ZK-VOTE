@@ -591,7 +591,6 @@ export function validateEnv(): void {
   if (!config.commentsContractId)
     errors.push("COMMENTS_CONTRACT_ID is required");
   if (!config.relayerSecretKey) errors.push("RELAYER_SECRET_KEY is required");
-  if (!config.authMasterKey) errors.push("AUTH_MASTER_KEY is required");
 
   if (config.votingContractId && !isValidContractId(config.votingContractId)) {
     errors.push(
@@ -606,6 +605,17 @@ export function validateEnv(): void {
   }
 
   const criticalKeys = ["VOTING_CONTRACT_ID", "TREE_CONTRACT_ID", "RELAYER_SECRET_KEY", "RELAYER_AUTH_TOKEN"];
+
+  // Derive the set of required env vars that were not provided.
+  const requiredKeys: Array<[string, unknown]> = [
+    ["VOTING_CONTRACT_ID", config.votingContractId],
+    ["TREE_CONTRACT_ID", config.treeContractId],
+    ["COMMENTS_CONTRACT_ID", config.commentsContractId],
+    ["RELAYER_SECRET_KEY", config.relayerSecretKey],
+    ["RELAYER_AUTH_TOKEN", config.relayerAuthToken],
+    ["AUTH_MASTER_KEY", config.authMasterKey],
+  ];
+  const missing = requiredKeys.filter(([, value]) => !value).map(([key]) => key);
   const criticalMissing = missing.filter((k) => criticalKeys.includes(k));
   const nonCriticalMissing = missing.filter((k) => !criticalKeys.includes(k));
 

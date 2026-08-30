@@ -1,209 +1,155 @@
 /**
- * OpenAPI Specification for ZKVote Backend
- * Documents all routes including audit and remediation for accountability.
- * Scope: middleware/audit.ts, routes/*, openapi.ts
+ * OpenAPI 3.1 Specification for ZKVote Backend (Task #339)
+ *
+ * Source of truth: the committed `backend/openapi.json` (generated docs for
+ * every versioned route). `buildOpenApiDocument()` returns that document so
+ * the served `/api-docs/openapi.json`, the ``docs:*`` scripts, and the doc
+ * itself stay byte-for-byte consistent (see scripts/generate-openapi.ts).
+ *
+ * Also exports the zod *response* schemas used to validate live responses in
+ * test/openapi-validation.test.js, and `ENDPOINTS` (method + route for every
+ * documented path) used for API.md coverage and docs accounting.
  */
 
-export const openApiSpec = {
-  openapi: "3.0.3",
-  info: {
-    title: "ZKVote Relayer API",
-    version: "1.0.0",
-    description: "Anonymous voting relayer with full audit trail and incident response",
-  },
-  servers: [{ url: "http://localhost:3001", description: "Local" }],
-  security: [{ bearerAuth: [] }],
-  components: {
-    securitySchemes: {
-      bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" },
-      relayerAuth: { type: "apiKey", in: "header", name: "X-Relayer-Auth" },
-    },
-    schemas: {
-      VoteRequest: {
-        type: "object",
-        required: ["daoId", "proposalId", "choice", "nullifier", "root", "proof"],
-        properties: {
-          daoId: { type: "integer" },
-          proposalId: { type: "integer" },
-          choice: { type: "boolean" },
-          nullifier: { type: "string", description: "BN254 field element hex < modulus (redacted in audit)" },
-          root: { type: "string", description: "Merkle root hex (redacted in audit)" },
-          proof: { type: "object", description: "Groth16 proof (redacted in audit)", properties: { a: { type: "string" }, b: { type: "string" }, c: { type: "string" } } },
-        },
-      },
-      AuditEntry: {
-        type: "object",
-        properties: {
-          id: { type: "string" },
-          timestamp: { type: "string", format: "date-time" },
-          requestId: { type: "string" },
-          method: { type: "string" },
-          path: { type: "string" },
-          action: { type: "string" },
-          actor: { type: "string", description: "Hashed actor identifier (PII redacted)" },
-          statusCode: { type: "integer" },
-          immutable: { type: "boolean", enum: [true] },
-        },
-      },
-      RemediationAction: {
-        type: "object",
-        required: ["action", "target", "reason", "idempotencyKey"],
-        properties: {
-          action: { type: "string", enum: ["freeze_dao", "unfreeze_dao", "pause_voting", "resume_voting", "revoke_member", "restore_member", "emergency_pause", "emergency_resume", "rotate_vk", "quarantine_proposal"] },
-          target: { type: "string", description: "DAO or proposal identifier" },
-          reason: { type: "string", minLength: 5 },
-          idempotencyKey: { type: "string", minLength: 8, description: "Replay protection - duplicate keys return 409" },
-          metadata: { type: "object", additionalProperties: true },
-        },
-      },
-    },
-  },
-  paths: {
-    "/vote": {
-      post: {
-        summary: "Submit anonymous vote (audited)",
-        security: [{ relayerAuth: [] }],
-        requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/VoteRequest" } } } },
-        responses: { "200": { description: "Vote submitted" }, "401": { description: "Unauthorized" } },
-        "x-audited": true,
-        "x-redacted-fields": ["nullifier", "root", "proof"],
-      },
-    },
-    "/comment/anonymous": {
-      post: {
-        summary: "Anonymous comment (audited)",
-        security: [{ relayerAuth: [] }],
-        "x-audited": true,
-        "x-redacted-fields": ["nullifier", "root", "proof"],
-      },
-    },
-    "/comment/edit": {
-      post: {
-        summary: "Edit comment (audited)",
-        security: [{ relayerAuth: [] }],
-        "x-audited": true,
-      },
-    },
-    "/comment/delete": {
-      post: {
-        summary: "Delete comment (audited)",
-        security: [{ relayerAuth: [] }],
-        "x-audited": true,
-      },
-    },
-    "/bridge/vote": {
-      post: {
-        summary: "Bridge vote (audited)",
-        "x-audited": true,
-        "x-redacted-fields": ["nullifier", "voteRoot", "sbtRoot", "proof"],
-      },
-    },
-    "/bridge/relay": {
-      post: {
-        summary: "Manual relay (audited)",
-        security: [{ relayerAuth: [] }],
-        "x-audited": true,
-      },
-    },
-    "/ipfs/image": {
-      post: {
-        summary: "Upload image (audited)",
-        security: [{ relayerAuth: [] }],
-        "x-audited": true,
-      },
-    },
-    "/ipfs/metadata": {
-      post: {
-        summary: "Upload metadata (audited)",
-        security: [{ relayerAuth: [] }],
-        "x-audited": true,
-      },
-    },
-    "/daos/sync": {
-      post: {
-        summary: "Sync DAOs (audited)",
-        security: [{ relayerAuth: [] }],
-        "x-audited": true,
-      },
-    },
-    "/events": {
-      post: {
-        summary: "Manual event (audited)",
-        security: [{ relayerAuth: [] }],
-        "x-audited": true,
-      },
-    },
-    "/events/notify": {
-      post: {
-        summary: "Notify event (audited)",
-        security: [{ relayerAuth: [] }],
-        "x-audited": true,
-      },
-    },
-    "/remediation/action": {
-      post: {
-        summary: "Structured remediation action (append-only, authz, replay-safe)",
-        security: [{ relayerAuth: [] }],
-        requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/RemediationAction" } } } },
-        responses: { "201": { description: "Recorded" }, "409": { description: "Duplicate idempotencyKey" }, "401": { description: "Unauthorized" } },
-        "x-audited": true,
-        "x-append-only": true,
-        "x-replay-safe": true,
-      },
-    },
-    "/remediation/log": {
-      get: {
-        summary: "Query remediation log",
-        security: [{ relayerAuth: [] }],
-        parameters: [{ name: "action", in: "query", schema: { type: "string" } }, { name: "target", in: "query", schema: { type: "string" } }, { name: "limit", in: "query", schema: { type: "integer" } }, { name: "offset", in: "query", schema: { type: "integer" } }],
-        responses: { "200": { description: "Log entries" } },
-      },
-    },
-    "/audit/logs": {
-      get: {
-        summary: "Query audit logs (redacted, authz)",
-        security: [{ relayerAuth: [] }],
-        parameters: [{ name: "action", in: "query", schema: { type: "string" } }, { name: "actor", in: "query", schema: { type: "string" } }, { name: "method", in: "query", schema: { type: "string" } }, { name: "from", in: "query", schema: { type: "string", format: "date-time" } }, { name: "to", in: "query", schema: { type: "string", format: "date-time" } }, { name: "limit", in: "query", schema: { type: "integer" } }, { name: "offset", in: "query", schema: { type: "integer" } }],
-        responses: { "200": { description: "Audit entries" } },
-        "x-redacted": true,
-      },
-    },
-    "/audit/export": {
-      get: {
-        summary: "Export audit logs (json/csv)",
-        security: [{ relayerAuth: [] }],
-        parameters: [{ name: "format", in: "query", schema: { type: "string", enum: ["json", "csv"] } }],
-        responses: { "200": { description: "Exported logs" } },
-      },
-    },
-    "/audit/stats": {
-      get: {
-        summary: "Audit statistics",
-        security: [{ relayerAuth: [] }],
-        responses: { "200": { description: "Stats" } },
-      },
-    },
-  },
-  "x-audit": {
-    description: "All mutating routes are audited with PII redaction. 100% coverage via global auditMiddleware.",
-    mutatingRoutes: [
-      "POST /vote",
-      "POST /comment/anonymous",
-      "POST /comment/edit",
-      "POST /comment/delete",
-      "POST /bridge/vote",
-      "POST /bridge/relay",
-      "POST /ipfs/image",
-      "POST /ipfs/metadata",
-      "POST /daos/sync",
-      "POST /events",
-      "POST /events/notify",
-      "POST /remediation/action",
-    ],
-    redaction: "proof, nullifier, root, commitment, secret, token, password, jwt always redacted",
-    immutable: "audit logs and remediation logs are append-only, no update/delete APIs",
-    replaySafe: "remediation uses idempotencyKey; duplicates return 409",
-  },
-} as const;
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
+import { z } from "zod";
+
+// ============================================
+// ZOD RESPONSE SCHEMAS
+// ============================================
+
+/** GET /health — 200 */
+export const healthResponseSchema = z
+  .object({
+    status: z.string(),
+    rpc: z
+      .object({
+        ok: z.boolean(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
+/** GET /ready — 200 */
+export const readyResponseSchema = z
+  .object({
+    status: z.string(),
+  })
+  .passthrough();
+
+/** GET /config — 200 */
+export const configResponseSchema = z
+  .object({
+    networkPassphrase: z.string(),
+    rpcUrl: z.string(),
+    ipfsEnabled: z.boolean(),
+  })
+  .passthrough();
+
+/** GET /daos — 200 */
+export const daosListResponseSchema = z
+  .object({
+    data: z.array(z.record(z.string(), z.unknown())),
+    pagination: z
+      .object({
+        cursor: z.string().nullable().optional(),
+        hasMore: z.boolean(),
+        total: z.number(),
+      })
+      .passthrough(),
+    lastSync: z.string().nullable(),
+    cached: z.boolean(),
+  })
+  .passthrough();
+
+/** Shared error body ({ error, ... }) used across error responses. */
+export const errorResponseSchema = z
+  .object({
+    error: z.string(),
+  })
+  .passthrough();
+
+// ============================================
+// ENDPOINTS — every documented route
+// ============================================
+
+export interface Endpoint {
+  method: "GET" | "POST";
+  path: string;
+}
+
+/**
+ * Every route documented in the OpenAPI document, using Express-style
+ * `:param` segments to match the prose headers in backend/API.md.
+ */
+export const ENDPOINTS: Endpoint[] = [
+  { method: "GET", path: "/health" },
+  { method: "GET", path: "/ready" },
+  { method: "GET", path: "/config" },
+  { method: "GET", path: "/db/stats" },
+  { method: "POST", path: "/vote" },
+  { method: "GET", path: "/proposal/:daoId/:proposalId" },
+  { method: "GET", path: "/root/:daoId" },
+  { method: "POST", path: "/comment/anonymous" },
+  { method: "GET", path: "/comment/challenge/:commitment" },
+  { method: "GET", path: "/comments/:daoId/:proposalId/nonce" },
+  { method: "GET", path: "/comments/:daoId/:proposalId" },
+  { method: "GET", path: "/comment/:daoId/:proposalId/:commentId" },
+  { method: "POST", path: "/comment/edit" },
+  { method: "POST", path: "/comment/delete" },
+  { method: "POST", path: "/comment/flag" },
+  { method: "GET", path: "/daos" },
+  { method: "GET", path: "/dao/:daoId" },
+  { method: "POST", path: "/daos/sync" },
+  { method: "GET", path: "/ipfs/health" },
+  { method: "POST", path: "/ipfs/image" },
+  { method: "POST", path: "/ipfs/metadata" },
+  { method: "GET", path: "/ipfs/:cid" },
+  { method: "GET", path: "/ipfs/image/:cid" },
+  { method: "GET", path: "/events/archived" },
+  { method: "GET", path: "/events/archived/:archiveId" },
+  { method: "GET", path: "/events/:daoId" },
+  { method: "GET", path: "/indexer/status" },
+  { method: "GET", path: "/indexer/daos" },
+  { method: "POST", path: "/events" },
+  { method: "POST", path: "/events/notify" },
+  { method: "POST", path: "/bridge/vote" },
+  { method: "GET", path: "/bridge/nullifier/:daoId/:proposalId/:nullifier" },
+  { method: "POST", path: "/bridge/relay" },
+  { method: "GET", path: "/circuits/:dao/:type/status" },
+  { method: "GET", path: "/admin/audit-log" },
+  { method: "GET", path: "/admin/sbt-transfer-attempts" },
+];
+
+// ============================================
+// DOCUMENT — reads the committed generated spec
+// ============================================
+
+/**
+ * Path to the committed OpenAPI document relative to this module
+ * (`src/openapi.ts` -> `backend/openapi.json`).
+ */
+const OPENAPI_JSON_PATH = fileURLToPath(
+  new URL("../openapi.json", import.meta.url),
+);
+
+let cachedDocument: Record<string, unknown> | null = null;
+
+/**
+ * Returns the full OpenAPI 3.1 document (all versioned routes).
+ *
+ * Loaded from the committed `backend/openapi.json` so the served spec and the
+ * `docs:*` scripts share a single source of truth.
+ */
+export function buildOpenApiDocument(): Record<string, unknown> {
+  if (!cachedDocument) {
+    cachedDocument = JSON.parse(fs.readFileSync(OPENAPI_JSON_PATH, "utf-8"));
+  }
+  return cachedDocument as Record<string, unknown>;
+}
+
+/** The complete OpenAPI spec (default export for app server integration). */
+export const openApiSpec = buildOpenApiDocument();
 
 export default openApiSpec;

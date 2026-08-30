@@ -1382,6 +1382,30 @@ curl http://localhost:3001/indexer/status
 
 ---
 
+### GET /indexer/status
+
+Event indexer health/status.
+
+**Authentication:** No
+**Rate Limit:** 60/min (queryLimiter)
+
+#### Example Request
+
+```bash
+curl http://localhost:3001/indexer/status
+```
+
+#### Response (200)
+
+```json
+{
+  "running": true,
+  "lastLedger": 12345
+}
+```
+
+---
+
 ### GET /indexer/daos
 
 List all DAOs that have indexed events.

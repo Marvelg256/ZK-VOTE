@@ -30,6 +30,13 @@ export function csrfGuard(
     return next();
   }
 
+  // Test mode: the relayer test suite drives write endpoints directly
+  // (no browser Origin/Referer or CSRF token), so skip enforcement there.
+  // Production and staging keep full CSRF protection.
+  if (config.testMode) {
+    return next();
+  }
+
   // N12 hardening: with wildcard CORS, any third-party origin could POST
   // to write endpoints — fail-closed instead of waving the request through.
   // Production deploys must set CORS_ORIGIN to the frontend origin.

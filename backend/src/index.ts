@@ -7,7 +7,7 @@
  */
 
 import cluster from "node:cluster";
-import express, { type Express } from "express";
+import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import swaggerUi from "swagger-ui-express";
@@ -74,7 +74,14 @@ import {
 import { closeDb } from "./services/db.js";
 
 // Middleware
-import { csrfGuard, requestLogger, errorHandler, auditMiddleware } from "./middleware/index.js";
+import {
+  csrfGuard,
+  requestLogger,
+  errorHandler,
+  auditMiddleware,
+  metricsMiddleware,
+  degradationContext,
+} from "./middleware/index.js";
 
 // Routes
 import {
@@ -92,6 +99,7 @@ import {
   auditRoutes,
   remediationRoutes,
 } from "./routes/index.js";
+import metricsRoutes from "./routes/metrics.js";
 import openApiSpec from "./openapi.js";
 
 // ============================================
@@ -235,10 +243,29 @@ app.use(circuitRoutes);
 app.use(auditRoutes);
 app.use(remediationRoutes);
 
-// OpenAPI spec endpoint (public, no audit log pollution for spec itself)
+// OpenAPI spec endpoints (public, no audit log pollution for the spec itself)
 app.get("/openapi.json", (_req, res) => {
   res.json(openApiSpec);
 });
+app.get("/api-docs/openapi.json", (_req, res) => {
+  res.json(buildOpenApiDocument());
+});
+
+// Interactive Swagger UI at /api-docs (relaxes the global CSP for itself)
+app.use(
+  "/api-docs",
+  (req: Request, res: Response, next: NextFunction) => {
+    res.setHeader(
+      "Content-Security-Policy",
+      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';",
+    );
+    next();
+  },
+  swaggerUi.serve,
+  swaggerUi.setup(buildOpenApiDocument() as object, {
+    swaggerOptions: { url: "/api-docs/openapi.json" },
+  }),
+);
 
 // Global error handler (must be last)
 app.use(errorHandler);
