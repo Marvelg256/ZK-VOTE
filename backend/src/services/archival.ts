@@ -56,7 +56,7 @@ export interface ArchivalJobResult {
   error?: string;
 }
 
-let archivalTimer: NodeJS.Timeout | null = null;
+let archivalScheduler: WatermarkScheduler | null = null;
 
 /**
  * Ensure archive storage directory exists
@@ -146,15 +146,17 @@ export async function runArchivalJob(
 
   log("info", "archival_job_start", { ageDays, cutoffDate, dbSizeBytesBefore });
 
+  // Declared outside the try so a cancellation can still report how much work
+  // was durably completed before the abort.
+  let totalArchivedCount = 0;
+  const createdRecords: ArchiveRecord[] = [];
+
   try {
     // Step 1: Discover ended elections (proposals with proposal_closed or proposal_archived events)
     const partitionRows = db
       .prepare("SELECT dao_id FROM partition_registry")
       .all() as Array<{ dao_id: number }>;
     const registeredDaos = partitionRows.map((r) => r.dao_id);
-
-    let totalArchivedCount = 0;
-    const createdRecords: ArchiveRecord[] = [];
 
     for (const daoId of registeredDaos) {
       throwIfAborted();
@@ -308,12 +310,12 @@ export async function runArchivalJob(
     });
     return {
       success: false,
-      archivedEventsCount: 0,
-      archivesCreatedCount: 0,
+      archivedEventsCount: totalArchivedCount,
+      archivesCreatedCount: createdRecords.length,
       dbSizeBytesBefore,
       dbSizeBytesAfter: dbSizeBytesBefore,
       savedSizeBytes: 0,
-      records: [],
+      records: createdRecords,
       error: errorMsg,
     };
   }
@@ -372,33 +374,67 @@ export function readArchivedEvents(archiveId: string): any[] {
 }
 
 /**
- * Start background periodic archival task
+ * Start the background periodic archival task.
+ *
+ * Uses the same single-flight, cancellable scheduler as the indexer (#323)
+ * rather than a bare `setInterval`. Two properties matter here: an archival run
+ * that outlives its interval must not have a second run start on top of it —
+ * both would be deleting rows from the same partition — and a shutdown must be
+ * able to abort a run mid-flight instead of waiting out a multi-minute job.
  */
 export function startArchivalTask(
   intervalMs: number = config.archivalIntervalMs || 86400000,
 ): void {
-  if (archivalTimer) {
-    clearInterval(archivalTimer);
-  }
+  void stopArchivalTask();
 
-  archivalTimer = setInterval(() => {
-    runArchivalJob().catch((err) => {
-      log("error", "periodic_archival_failed", {
-        error: (err as Error).message,
-      });
-    });
-  }, intervalMs);
+  archivalScheduler = new WatermarkScheduler({
+    intervalMs,
+    runCycle: async (signal) => {
+      const stopTimer = archivalDuration.startTimer();
+      try {
+        const result = await runArchivalJob({ signal });
+        archivalRunsTotal.inc({
+          result: result.success
+            ? "success"
+            : signal.aborted
+              ? "cancelled"
+              : "failed",
+        });
+      } finally {
+        stopTimer();
+      }
+    },
+    onOverrun: (skippedRuns, reason) => {
+      log("warn", "archival_run_skipped", { skippedRuns, reason });
+    },
+    onError: (error) => {
+      archivalRunsTotal.inc({ result: "failed" });
+      log("error", "periodic_archival_failed", { error: error.message });
+    },
+  });
+  archivalScheduler.start();
 
   log("info", "archival_task_started", { intervalMs });
 }
 
 /**
- * Stop background archival task
+ * Stop the background archival task, aborting any run in flight.
+ *
+ * Resolves only once that run has unwound, so callers can rely on no archival
+ * write still being in progress when the promise settles.
  */
-export function stopArchivalTask(): void {
-  if (archivalTimer) {
-    clearInterval(archivalTimer);
-    archivalTimer = null;
-    log("info", "archival_task_stopped");
-  }
+export async function stopArchivalTask(): Promise<void> {
+  const scheduler = archivalScheduler;
+  if (!scheduler) return;
+  archivalScheduler = null;
+
+  await scheduler.stop();
+  log("info", "archival_task_stopped");
+}
+
+/** Scheduler stats for the archival loop, or `null` when it is not running. */
+export function getArchivalSchedulerStats(): ReturnType<
+  WatermarkScheduler["stats"]
+> | null {
+  return archivalScheduler ? archivalScheduler.stats() : null;
 }
