@@ -99,15 +99,8 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
-  authRoutes,
-  quadraticRoutes,
-  metricsRoutes,
-  remediationRoutes,
-  novaRoutes,
-  adminRoutes,
-  thresholdRoutes,
-  membershipRoutes,
-  auditRoutes,
+  analyticsRoutes,
+  encryptionRoutes,
 } from "./routes/index.js";
 import { registerShutdownHandler } from "./routes/admin.js";
 
@@ -266,66 +259,8 @@ app.use(claimRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
-app.use(authRoutes);
-app.use(quadraticRoutes);
-app.use("/api/v1/nova", novaRoutes);
-app.use(noStore, adminRoutes);
-app.use(noStore, thresholdRoutes);
-app.use(membershipRoutes);
-app.use(noStore, auditRoutes);
-
-// ============================================
-// API VERSIONING (#139)
-// ============================================
-// URL-based versioning: mount the same routers under /api/v1 in addition to
-// the existing unversioned paths, so existing clients keep working while new
-// clients can opt into the explicit, cache-friendly versioned path. A
-// response header also advertises which version served the request.
-//
-// Deliberately out of scope for this pass (see PR body): deprecation/Sunset
-// headers for the unversioned routes, a version-lifecycle policy doc, and
-// updating the frontend to call /api/v1.
-app.use((_req, res, next) => {
-  res.setHeader("API-Version", "v1");
-  next();
-});
-
-const v1Router = express.Router();
-v1Router.use(metricsRoutes);
-v1Router.use(healthRoutes);
-v1Router.use(remediationRoutes);
-v1Router.use(noStore, votingRoutes);
-v1Router.use(daoRoutes);
-v1Router.use(ipfsRoutes);
-v1Router.use(commentsRoutes);
-v1Router.use(indexerRoutes);
-v1Router.use(bridgeRoutes);
-v1Router.use(circuitRoutes);
-v1Router.use(quadraticRoutes);
-v1Router.use(noStore, adminRoutes);
-v1Router.use(noStore, thresholdRoutes);
-v1Router.use(membershipRoutes);
-v1Router.use(noStore, auditRoutes);
-app.use("/api/v1", v1Router);
-
-// OpenAPI spec + interactive docs
-const openApiDocument = buildOpenApiDocument();
-app.get("/api-docs/openapi.json", (_req, res) => res.json(openApiDocument));
-app.use(
-  "/api-docs",
-  // helmet's default CSP blocks the inline scripts/styles Swagger UI's
-  // bundled assets need; relax it for this documentation-only route.
-  (
-    _req: express.Request,
-    res: express.Response,
-    next: express.NextFunction,
-  ) => {
-    res.removeHeader("Content-Security-Policy");
-    next();
-  },
-  swaggerUi.serve,
-  swaggerUi.setup(openApiDocument),
-);
+app.use(analyticsRoutes);
+app.use(noStore, encryptionRoutes);
 
 // Global error handler (must be last)
 app.use(errorHandler);
@@ -385,7 +320,7 @@ async function gracefulShutdown(reason: string): Promise<void> {
     });
   });
 
-  stopBackgroundServices();
+  await stopBackgroundServices();
   stopAuthScheduler();
   stopWalResilience();
   log("info", "shutdown_component_stopped", {
@@ -547,13 +482,21 @@ async function startBackgroundServices(): Promise<void> {
   });
 }
 
-function stopBackgroundServices(): void {
+/**
+ * Stop every background loop.
+ *
+ * Awaits the indexer specifically: its scheduler cancels an in-flight poll
+ * cycle and closes the database only once that cycle has unwound (#323), so a
+ * shutdown that did not await it could close the HTTP server while a poll was
+ * still writing.
+ */
+async function stopBackgroundServices(): Promise<void> {
   if (!backgroundServicesStarted) return;
   backgroundServicesStarted = false;
 
   log("info", "stopping_background_services", { pid: process.pid });
 
-  stopIndexer();
+  await stopIndexer();
   stopDaoSync();
   stopMembershipSync();
   stopTTLRenewal();
@@ -644,7 +587,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
             log("info", "worker_demoted_stopping_background_services", {
               pid: process.pid,
             });
-            stopBackgroundServices();
+            await stopBackgroundServices();
           }
         });
 

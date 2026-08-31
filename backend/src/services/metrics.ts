@@ -54,6 +54,13 @@ export const httpRequestSize = new Histogram({
   registers: [register],
 });
 
+export const httpRequestsInFlight = new Gauge({
+  name: "zkvote_http_requests_in_flight",
+  help: "HTTP requests currently being served (concurrency / backpressure signal)",
+  labelNames: ["method", "route"] as const,
+  registers: [register],
+});
+
 export const httpResponseSize = new Histogram({
   name: "zkvote_http_response_size_bytes",
   help: "HTTP response body size in bytes",
@@ -348,6 +355,49 @@ export const indexerPollDuration = new Histogram({
 export const indexerOverrunSkips = new Counter({
   name: "zkvote_indexer_overrun_skips_total",
   help: "Polling cycles skipped because the prior indexer cycle was still active",
+  registers: [register],
+});
+
+export const indexerShedPolls = new Counter({
+  name: "zkvote_indexer_shed_polls_total",
+  help: "Polling cycles shed before starting because the downstream queue was saturated",
+  registers: [register],
+});
+
+export const indexerBackpressureLevel = new Gauge({
+  name: "zkvote_indexer_backpressure_level",
+  help: "Indexer backpressure level (0 = nominal; each level widens the poll interval)",
+  registers: [register],
+});
+
+export const indexerPollIntervalSeconds = new Gauge({
+  name: "zkvote_indexer_poll_interval_seconds",
+  help: "Effective indexer poll interval, widened while under backpressure",
+  registers: [register],
+});
+
+export const indexerCyclesTotal = new Counter({
+  name: "zkvote_indexer_cycles_total",
+  help: "Indexer polling cycles by terminal result",
+  labelNames: ["result"] as const,
+  registers: [register],
+});
+
+// ============================================
+// ARCHIVAL METRICS
+// ============================================
+
+export const archivalRunsTotal = new Counter({
+  name: "zkvote_archival_runs_total",
+  help: "Archival job runs by terminal result",
+  labelNames: ["result"] as const,
+  registers: [register],
+});
+
+export const archivalDuration = new Histogram({
+  name: "zkvote_archival_duration_seconds",
+  help: "Duration of a complete archival job",
+  buckets: [0.1, 0.5, 1, 5, 15, 60, 300, 900],
   registers: [register],
 });
 

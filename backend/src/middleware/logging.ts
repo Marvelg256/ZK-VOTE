@@ -8,17 +8,27 @@
  */
 
 import type { Request, Response, NextFunction } from "express";
-import crypto from "crypto";
-import {
-  log,
-  hashIp,
-  getRedactionPolicy,
-  runWithContext,
-  type RequestContext,
-} from "../services/logger.js";
 
-const TRACEPARENT_RE =
-  /^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/i;
+// Extend Express Request to include ctx
+declare global {
+  namespace Express {
+    interface Request {
+      ctx?: string;
+      traceId?: string;
+      spanId?: string;
+    }
+  }
+}
+import crypto from "crypto";
+// import { config } from "../config.js"; // Unused - kept for reference
+import { log, hashIp, getRedactionPolicy } from "../services/logger.js";
+import {
+  createSpanContext,
+  formatTraceparent,
+  parseTraceparent,
+  runWithSpanContext,
+  type SpanContext,
+} from "../services/tracing.js";
 
 /**
  * Parses an inbound W3C `traceparent` header (version-traceid-parentid-flags,
@@ -28,13 +38,7 @@ const TRACEPARENT_RE =
 export function parseIncomingTraceId(
   header: string | undefined,
 ): string | undefined {
-  if (!header) return undefined;
-  const match = TRACEPARENT_RE.exec(header.trim());
-  if (!match) return undefined;
-  const traceId = match[2];
-  // An all-zero trace ID is explicitly invalid per the spec.
-  if (/^0+$/.test(traceId)) return undefined;
-  return traceId;
+  return parseTraceparent(header)?.traceId;
 }
 
 /**
@@ -53,16 +57,20 @@ export function requestLogger(
   // W3C Trace Context (#141): continue an inbound trace ID when present so
   // this request can be correlated across services, otherwise start a new
   // trace. The span ID always identifies this hop.
-  const traceId =
-    parseIncomingTraceId(req.get("traceparent")) ||
-    crypto.randomBytes(16).toString("hex");
-  const spanId = crypto.randomBytes(8).toString("hex");
-  req.traceId = traceId;
-  res.setHeader("traceparent", `00-${traceId}-${spanId}-01`);
+  //
+  // The context is also installed as ambient for the rest of the chain (#321),
+  // which is what lets a database write or a Soroban RPC call opened deep
+  // inside a handler attach itself to this request's trace without every
+  // intervening signature having to carry a context argument.
+  const inbound = parseTraceparent(req.get("traceparent"));
+  const spanContext: SpanContext = createSpanContext(inbound);
+  req.traceId = spanContext.traceId;
+  req.spanId = spanContext.spanId;
+  res.setHeader("traceparent", formatTraceparent(spanContext));
 
   const context: RequestContext = {
     ctx,
-    traceId,
+    traceId: spanContext.traceId,
     path: req.path,
     method: req.method,
   };
@@ -72,36 +80,18 @@ export function requestLogger(
     const policy = getRedactionPolicy();
     let ipMeta: Record<string, string> = {};
 
-    if (policy.showClientIp === "plain") {
-      ipMeta = { ip: req.ip || "" };
-    } else if (policy.showClientIp === "hash") {
-      ipMeta = { ipHash: hashIp(req.ip) };
-    }
-    // If "none", ipMeta stays empty
-
-    // Build body meta (only log body keys, not values)
-    const bodyMeta = policy.showBodyKeysOnly
-      ? { bodyKeys: Object.keys(req.body || {}) }
-      : {};
-
-    log("info", "request_start", {
+  // Log request end on finish
+  res.on("finish", () => {
+    log("info", "request_end", {
+      ctx,
+      traceId: spanContext.traceId,
       path: req.path,
       method: req.method,
       ...ipMeta,
       ...bodyMeta,
     });
 
-    // Log request end on finish. The finish listener is registered within
-    // the correlation context, so it inherits the same ctx/traceId.
-    res.on("finish", () => {
-      log("info", "request_end", {
-        path: req.path,
-        status: res.statusCode,
-      });
-    });
-
-    next();
-  });
+  runWithSpanContext(spanContext, next);
 }
 
 /**
