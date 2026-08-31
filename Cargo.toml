@@ -10,6 +10,7 @@ members = [
     "contracts/bridge/soroban",
     "contracts/circuit-registry",
     "tests/integration",
+    "crates/nova-aggregator",
 ]
 default-members = [
     "contracts/zkvote-groth16",

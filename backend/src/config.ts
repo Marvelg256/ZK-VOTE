@@ -605,6 +605,11 @@ export function validateEnv(): void {
   }
 
   const criticalKeys = ["VOTING_CONTRACT_ID", "TREE_CONTRACT_ID", "RELAYER_SECRET_KEY", "RELAYER_AUTH_TOKEN"];
+  const missing: string[] = [];
+  if (!config.votingContractId) missing.push("VOTING_CONTRACT_ID");
+  if (!config.treeContractId) missing.push("TREE_CONTRACT_ID");
+  if (!config.relayerSecretKey) missing.push("RELAYER_SECRET_KEY");
+  if (!config.relayerAuthToken) missing.push("RELAYER_AUTH_TOKEN");
   const criticalMissing = missing.filter((k) => criticalKeys.includes(k));
   const nonCriticalMissing = missing.filter((k) => !criticalKeys.includes(k));
 

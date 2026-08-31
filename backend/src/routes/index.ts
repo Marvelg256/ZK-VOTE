@@ -13,3 +13,7 @@ export { default as claimRoutes } from "./claim.js";
 export { default as indexerRoutes, initIndexerRoutes } from "./indexer.js";
 export { default as bridgeRoutes } from "./bridge.js";
 export { default as circuitRoutes } from "./circuits.js";
+export { default as novaRoutes } from "./nova.js";
+export { default as metricsRoutes } from "./metrics.js";
+export { default as remediationRoutes } from "./remediation.js";
+export { registerShutdownHandler } from "./admin.js";

@@ -74,7 +74,14 @@ import {
 import { closeDb } from "./services/db.js";
 
 // Middleware
-import { csrfGuard, requestLogger, errorHandler, auditMiddleware } from "./middleware/index.js";
+import {
+  csrfGuard,
+  requestLogger,
+  errorHandler,
+  auditMiddleware,
+  metricsMiddleware,
+  degradationContext,
+} from "./middleware/index.js";
 
 // Routes
 import {
@@ -89,6 +96,10 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
+  novaRoutes,
+  metricsRoutes,
+  remediationRoutes,
+  registerShutdownHandler,
 } from "./routes/index.js";
 import openApiSpec from "./openapi.js";
 
@@ -230,6 +241,7 @@ app.use(claimRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
+app.use("/api/v1/nova", novaRoutes);
 
 // Global error handler (must be last)
 app.use(errorHandler);
@@ -298,45 +310,10 @@ async function gracefulShutdown(reason: string): Promise<void> {
 
   await httpClosed;
 
-    // Keep the startup banner on stdout for human-readable output
-    console.log(`\nZKVote Relayer running on http://localhost:${PORT}`);
-
-    logger.info("endpoints_registered", {
-      core: [
-        "/health",
-        "/ready",
-        "/config",
-        "/vote",
-        "/proposal/:dao/:prop",
-        "/root/:dao",
-        "/events/:daoId",
-        "/events/notify",
-        "/indexer/status",
-      ],
-      comments: [
-        "/comment/anonymous",
-        "/comments/:dao/:prop",
-        "/comments/:dao/:prop/nonce",
-        "/comment/:dao/:prop/:id",
-        "/comment/edit",
-        "/comment/delete",
-      ],
-      bridge: [
-        "/bridge/vote",
-        "/bridge/nullifier/:daoId/:proposalId/:nullifier",
-        "/bridge/relay",
-      ],
-      ipfs: config.ipfsEnabled
-        ? [
-            "/ipfs/image",
-            "/ipfs/metadata",
-            "/ipfs/:cid",
-            "/ipfs/image/:cid",
-            "/ipfs/health",
-          ]
-        : [],
-    });
-  }
+  const drained = await waitForSequenceLockIdle(DRAIN_TIMEOUT_MS).then(
+    () => true,
+    () => false,
+  );
 
   clearTimeout(forceExitTimer);
   log("info", "shutdown_complete", {
