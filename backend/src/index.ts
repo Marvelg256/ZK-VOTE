@@ -96,11 +96,8 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
-  auditRoutes,
-  remediationRoutes,
 } from "./routes/index.js";
 import metricsRoutes from "./routes/metrics.js";
-import openApiSpec from "./openapi.js";
 
 // ============================================
 // ENVIRONMENT VALIDATION
@@ -231,7 +228,6 @@ initIndexerRoutes(triggerDaoMembershipSync);
 // Mount route handlers (metrics first, before CSRF/auth middleware)
 app.use(metricsRoutes);
 app.use(healthRoutes);
-app.use(remediationRoutes);
 app.use(noStore, votingRoutes);
 app.use(daoRoutes);
 app.use(ipfsRoutes);
@@ -240,13 +236,7 @@ app.use(claimRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
-app.use(auditRoutes);
-app.use(remediationRoutes);
-
 // OpenAPI spec endpoints (public, no audit log pollution for the spec itself)
-app.get("/openapi.json", (_req, res) => {
-  res.json(openApiSpec);
-});
 app.get("/api-docs/openapi.json", (_req, res) => {
   res.json(buildOpenApiDocument());
 });
