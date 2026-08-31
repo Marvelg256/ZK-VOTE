@@ -89,6 +89,7 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
+  analyticsRoutes,
 } from "./routes/index.js";
 import openApiSpec from "./openapi.js";
 
@@ -230,6 +231,7 @@ app.use(claimRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
+app.use(analyticsRoutes);
 
 // Global error handler (must be last)
 app.use(errorHandler);
@@ -298,47 +300,16 @@ async function gracefulShutdown(reason: string): Promise<void> {
 
   await httpClosed;
 
-    // Keep the startup banner on stdout for human-readable output
-    console.log(`\nZKVote Relayer running on http://localhost:${PORT}`);
-
-    logger.info("endpoints_registered", {
-      core: [
-        "/health",
-        "/ready",
-        "/config",
-        "/vote",
-        "/proposal/:dao/:prop",
-        "/root/:dao",
-        "/events/:daoId",
-        "/events/notify",
-        "/indexer/status",
-      ],
-      comments: [
-        "/comment/anonymous",
-        "/comments/:dao/:prop",
-        "/comments/:dao/:prop/nonce",
-        "/comment/:dao/:prop/:id",
-        "/comment/edit",
-        "/comment/delete",
-      ],
-      bridge: [
-        "/bridge/vote",
-        "/bridge/nullifier/:daoId/:proposalId/:nullifier",
-        "/bridge/relay",
-      ],
-      ipfs: config.ipfsEnabled
-        ? [
-            "/ipfs/image",
-            "/ipfs/metadata",
-            "/ipfs/:cid",
-            "/ipfs/image/:cid",
-            "/ipfs/health",
-          ]
-        : [],
-    });
-  }
+  // Wait for any in-flight sequence-locked chain submissions to drain.
+  // Returns false on timeout with work still outstanding.
+  const drained = await waitForSequenceLockIdle(DRAIN_TIMEOUT_MS);
 
   clearTimeout(forceExitTimer);
+  if (!drained) {
+    log("error", "shutdown_drain_timeout", {
+      pendingSequenceLockOps: getPendingSequenceLockOps(),
+    });
+  }
   log("info", "shutdown_complete", {
     reason,
     cleanDrain: drained,

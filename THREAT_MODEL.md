@@ -228,6 +228,69 @@ Admin guidance per DAO (documented for frontend tooltip):
 - `frontend/src/lib/zkproof.ts`: `generateClaimProof`, `calculateClaimNullifier`, `calculateVoteNullifier`.
 - `frontend/src/components/ClaimRewards.tsx` + `frontend/src/queries/claimQueries.ts` use `relayerFetch("/api/v1/claim", ...)`.
 
+## Privacy-Preserving Analytics (#306)
+
+Scope addition: on-chain homomorphic accumulation in `contracts/threshold-crypto`
+(`submit_analytic_contribution`, `analytics_aggregate`, `analytics_min_cohort`,
+`init_analytics`), backend service `backend/src/services/privacy-analytics.ts`
++ `backend/src/routes/analytics.ts`, migration `004_add_privacy_analytics`, and
+frontend `AnalyticsPanel` (`frontend/src/components/AnalyticsPanel.tsx`,
+`analyticsCrypto.ts`, `frontend/src/queries/analyticsQueries.ts`).
+
+**Goal**: compute turnout / participation aggregates (e.g. how many members
+contributed to a round) **without leaking which member contributed** to indexers or
+observers, and without revealing any single contribution.
+
+### Cryptographic design
+
+Analytics use an **ElGamal ciphertext over BN254 G1**. Each contributor submits
+`(c1, c2) = (r·G, m·G + r·Y)` where `m ∈ {0,1}` is their contributed value
+(1 = participated), `Y` is the DAO's joint public key, and `r` is fresh
+per submission.
+
+- **Homomorphic accumulation (off-chain, tested)**: contributions are summed via
+  point addition so the stored value is always the *sum*
+  `(Σ c1, Σ c2) = (R·G, (Σm)·G + R·Y)`. Any single intermediate sum is a valid
+  encryption of the running total, never a contributor's own ciphertext, so an
+  indexer reading the aggregate at any time learns nothing about any individual
+  `m_i`. See `homomorphicAdd` / `thresholdDecryptAggregate` in
+  `backend/src/services/privacy-analytics.ts`.
+- **On-chain register (tested, real host crypto)**: the threshold-crypto contract
+  holds the *aggregate only* and accumulates with the Soroban `bn254_g1_add` host
+  function. It never stores per-contributor plaintext. A contributor may submit at
+  most once per `(dao_id, round_id)`.
+- **Threshold decrypt of aggregate only**: there is no key enabling plaintext
+  recovery of any single contribution. Decryption recovers only `Σm` after enough
+  key shares combine, and only once the **privacy budget** is met.
+
+### Privacy budget (`min_cohort`)
+
+Before any aggregate may be decrypted, at least `minimum_cohort` contributions
+must be present (configured via `init_analytics`, checked in the contract's
+`analytics_aggregate` gate). This prevents an observer from decrypting an
+aggregate of one or two contributions and thereby singling out a voter. Counts
+(`analytics_count`) are public — they do not reveal identities.
+
+### Threat note
+
+- **Indexer/observer learns**: only `Σm` after cohort is met (and only via
+  threshold-decryption). Aggregate counts are public. No per-voter `m_i`.
+- **Cannot learn**: which contributor submitted what; the value of any single
+  contribution; the timely aggregate while below `min_cohort`.
+- **Contract admin**: can set/rotate the joint key and the cohort, but gains no
+  plaintext linkage to a member unless a full threshold of shares colludes.
+- **Threshold collusion**: the standard risk applies — if `t` of `n` share-holders
+  collude, they can decrypt the *aggregate*. This leaks only `Σm`, not per-voter
+  values, so the exposure is bounded to overall turnout.
+- **Double-counting**: prevented per contributor per round on-chain; off-chain the
+  service replaces a prior round's row on re-submission for the same DAO.
+- **Residual**: the ElGamal discrete-log lookup for `Σm` (solving `x` where
+  `x·G = Σm·G`) assumes `Σm` is small (bounded by cohort / DAO size), which holds
+  because contributions are single-bit; the scheme deliberately does not try to
+  hide the *total count* from a threshold decryptor, only from indexers without a
+  threshold. On-chain and off-chain homomorphic surfaces are independently tested
+  against the same BN254 primitives.
+
 ## Next Hardening Steps
 - Relay: structured logging with redaction; configurable log retention; coarser error responses; optional cover traffic/backoff to reduce correlation; explicit anti-censorship monitoring (missing votes vs submissions).
 - Contracts: coarse error codes to avoid fine-grained leakage; optional per-contract versioning + upgrade events; ensure membership/admin checks stay isolated.
