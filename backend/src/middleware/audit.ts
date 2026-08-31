@@ -370,6 +370,13 @@ export function auditMiddleware(req: Request, res: Response, next: NextFunction)
  * Synchronous helper to manually audit an action inside route handlers.
  * Use when you need to record audit with custom action name or extra context.
  */
+export function auditLog(action: string): (req: Request, res: Response, next: NextFunction) => void {
+  return (req, _res, next) => {
+    auditAction(req, action);
+    next();
+  };
+}
+
 export function auditAction(
   req: Request,
   action: string,

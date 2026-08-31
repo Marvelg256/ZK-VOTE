@@ -54,6 +54,13 @@ export const httpRequestSize = new Histogram({
   registers: [register],
 });
 
+export const httpRequestsInFlight = new Gauge({
+  name: "zkvote_http_requests_in_flight",
+  help: "HTTP requests currently being served (concurrency / backpressure signal)",
+  labelNames: ["method", "route"] as const,
+  registers: [register],
+});
+
 export const httpResponseSize = new Histogram({
   name: "zkvote_http_response_size_bytes",
   help: "HTTP response body size in bytes",
@@ -85,6 +92,24 @@ export const coalescingWaitTime = new Histogram({
   help: "Time spent waiting for coalesced requests in seconds",
   labelNames: ["key"] as const,
   buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30],
+  registers: [register],
+});
+
+// ============================================
+// MEMBERSHIP REGISTRATION METRICS (#371)
+// ============================================
+
+export const membershipRegistrationTotal = new Counter({
+  name: "zkvote_membership_registration_requests_total",
+  help: "Total commitment registration requests served by the membership route",
+  labelNames: ["dao_id"] as const,
+  registers: [register],
+});
+
+export const membershipRegistrationLimited = new Counter({
+  name: "zkvote_membership_registration_limited_total",
+  help: "Commitment registration requests blocked by rate limiting or the on-chain registration cooldown",
+  labelNames: ["reason"] as const,
   registers: [register],
 });
 
@@ -330,6 +355,133 @@ export const indexerPollDuration = new Histogram({
 export const indexerOverrunSkips = new Counter({
   name: "zkvote_indexer_overrun_skips_total",
   help: "Polling cycles skipped because the prior indexer cycle was still active",
+  registers: [register],
+});
+
+export const indexerShedPolls = new Counter({
+  name: "zkvote_indexer_shed_polls_total",
+  help: "Polling cycles shed before starting because the downstream queue was saturated",
+  registers: [register],
+});
+
+export const indexerBackpressureLevel = new Gauge({
+  name: "zkvote_indexer_backpressure_level",
+  help: "Indexer backpressure level (0 = nominal; each level widens the poll interval)",
+  registers: [register],
+});
+
+export const indexerPollIntervalSeconds = new Gauge({
+  name: "zkvote_indexer_poll_interval_seconds",
+  help: "Effective indexer poll interval, widened while under backpressure",
+  registers: [register],
+});
+
+export const indexerCyclesTotal = new Counter({
+  name: "zkvote_indexer_cycles_total",
+  help: "Indexer polling cycles by terminal result",
+  labelNames: ["result"] as const,
+  registers: [register],
+});
+
+// ============================================
+// ARCHIVAL METRICS
+// ============================================
+
+export const archivalRunsTotal = new Counter({
+  name: "zkvote_archival_runs_total",
+  help: "Archival job runs by terminal result",
+  labelNames: ["result"] as const,
+  registers: [register],
+});
+
+export const archivalDuration = new Histogram({
+  name: "zkvote_archival_duration_seconds",
+  help: "Duration of a complete archival job",
+  buckets: [0.1, 0.5, 1, 5, 15, 60, 300, 900],
+  registers: [register],
+});
+
+// ============================================
+// ZK PROOF METRICS
+// ============================================
+
+/**
+ * Histogram of ZK proof verification duration in seconds.
+ * Tracks how long local (off-chain) proof validation takes before relaying.
+ */
+export const proofVerificationDuration = new Histogram({
+  name: "zkvote_proof_verification_duration_seconds",
+  help: "Duration of ZK proof verification in seconds",
+  labelNames: ["dao_id", "result"] as const,
+  buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+  registers: [register],
+});
+
+/**
+ * Total number of proof validation errors, labelled by error kind.
+ * Error kinds: invalid_format | field_out_of_range | stale_root | double_spend | other
+ */
+export const proofValidationErrors = new Counter({
+  name: "zkvote_proof_validation_errors_total",
+  help: "Total ZK proof validation errors",
+  labelNames: ["error_kind"] as const,
+  registers: [register],
+});
+
+/**
+ * Total number of proof submissions, labelled by result (accepted | rejected).
+ */
+export const proofSubmissionsTotal = new Counter({
+  name: "zkvote_proof_submissions_total",
+  help: "Total ZK proof submissions received by the relayer",
+  labelNames: ["result"] as const,
+  registers: [register],
+});
+
+// ============================================
+// RELAYER BUSINESS METRICS
+// ============================================
+
+/**
+ * Total relay attempts (submit-to-chain operations), labelled by status.
+ * Status: success | failed | simfail | timeout
+ */
+export const relayAttemptsTotal = new Counter({
+  name: "zkvote_relay_attempts_total",
+  help: "Total relay (submit-to-Stellar) attempts",
+  labelNames: ["status"] as const,
+  registers: [register],
+});
+
+/**
+ * Duration of a complete relay operation (simulate → submit → confirm).
+ */
+export const relayDuration = new Histogram({
+  name: "zkvote_relay_duration_seconds",
+  help: "End-to-end relay operation duration in seconds",
+  labelNames: ["status"] as const,
+  buckets: [0.1, 0.5, 1, 2, 5, 10, 20, 30, 60],
+  registers: [register],
+});
+
+/**
+ * Total relay errors classified by error type.
+ * Error types: simulation | submission | timeout | sequence_lock | rpc_error | other
+ */
+export const relayErrors = new Counter({
+  name: "zkvote_relay_errors_total",
+  help: "Total relay errors by type",
+  labelNames: ["error_type"] as const,
+  registers: [register],
+});
+
+/**
+ * Current depth of the pending-relay queue (for backpressure visibility).
+ * Decrements when a relay is confirmed or definitively rejected.
+ */
+export const relayQueueDepth = new Gauge({
+  name: "zkvote_relay_queue_depth",
+  help: "Current number of vote submissions in flight (sequence-locked)",
   registers: [register],
 });
 

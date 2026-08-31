@@ -10,9 +10,8 @@ import cluster from "node:cluster";
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import helmet from "helmet";
-import swaggerUi from "swagger-ui-express";
-
-import { buildOpenApiDocument } from "./openapi.js";
+import { registerShutdownHandler } from "./routes/admin.js";
+import { initializeTelemetry } from "./services/otel.js";
 
 // Configuration and types
 import { config, validateEnv, isValidContractId } from "./config.js";
@@ -39,6 +38,10 @@ import {
   performInitialCheckpoint,
   detectAndHandleWalIssue,
 } from "./services/walResilience.js";
+import {
+  startScheduledBackups,
+  stopScheduledBackups,
+} from "./services/backup.js";
 import {
   startMonitor as startPinMonitor,
   stopMonitor as stopPinMonitor,
@@ -96,6 +99,8 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
+  analyticsRoutes,
+  encryptionRoutes,
 } from "./routes/index.js";
 import metricsRoutes from "./routes/metrics.js";
 
@@ -104,6 +109,7 @@ import metricsRoutes from "./routes/metrics.js";
 // ============================================
 
 validateEnv();
+initializeTelemetry();
 
 // ============================================
 // EXPRESS APP SETUP
@@ -210,12 +216,28 @@ app.use(cors(corsOptions));
 // Logging middleware
 app.use(requestLogger);
 
-// Audit middleware - must be after body parsing and requestLogger, before routes
-// Audits every mutating route (POST/PUT/PATCH/DELETE) with PII redaction, append-only
-app.use(auditMiddleware);
+// Graduated throttling (delays before a client is hard rate-limited)
+app.use(graduatedSlowDown);
 
-// CSRF protection (applied globally)
+// CSRF token generation for safe methods (GET, HEAD, OPTIONS)
+app.use(csrfTokenMiddleware);
+
+// CSRF protection (applied globally for write methods)
 app.use(csrfGuard);
+
+// ============================================
+// CSRF TOKEN ENDPOINT
+// ============================================
+
+// Dedicated endpoint for CSRF token issuance.
+// The SPA calls GET /csrf-token on startup and stores the X-CSRF-Token
+// response header value.  The csrfTokenMiddleware (applied globally above)
+// handles the actual token generation for all GET requests; this route
+// just provides a predictable, documented URL for the frontend to target.
+app.get("/csrf-token", (_req, res) => {
+  // Token is already set in the response header by csrfTokenMiddleware.
+  res.json({ ok: true });
+});
 
 // ============================================
 // ROUTE INITIALIZATION
@@ -315,7 +337,7 @@ async function gracefulShutdown(reason: string): Promise<void> {
     });
   });
 
-  stopBackgroundServices();
+  await stopBackgroundServices();
   stopAuthScheduler();
   stopWalResilience();
   log("info", "shutdown_component_stopped", {
@@ -458,6 +480,10 @@ async function startBackgroundServices(): Promise<void> {
     startWalCheckpointing(database);
     startWalMonitor(database, dbPath);
     startPeriodicBackups(database, dbPath);
+    // Encrypted snapshot backups (#359) — opt-in via BACKUP_ENCRYPTION_ENABLED.
+    if (config.backupEncryptionEnabled) {
+      startScheduledBackups(config.backupIntervalMs);
+    }
   } catch (err) {
     log("warn", "wal_resilience_start_failed", {
       error: (err as Error).message,
@@ -473,19 +499,28 @@ async function startBackgroundServices(): Promise<void> {
   });
 }
 
-function stopBackgroundServices(): void {
+/**
+ * Stop every background loop.
+ *
+ * Awaits the indexer specifically: its scheduler cancels an in-flight poll
+ * cycle and closes the database only once that cycle has unwound (#323), so a
+ * shutdown that did not await it could close the HTTP server while a poll was
+ * still writing.
+ */
+async function stopBackgroundServices(): Promise<void> {
   if (!backgroundServicesStarted) return;
   backgroundServicesStarted = false;
 
   log("info", "stopping_background_services", { pid: process.pid });
 
-  stopIndexer();
+  await stopIndexer();
   stopDaoSync();
   stopMembershipSync();
   stopTTLRenewal();
   stopSbtTransferWatch();
   stopPinMonitor();
   stopMemoryMonitor();
+  stopScheduledBackups();
 }
 
 // ============================================
@@ -569,7 +604,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
             log("info", "worker_demoted_stopping_background_services", {
               pid: process.pid,
             });
-            stopBackgroundServices();
+            await stopBackgroundServices();
           }
         });
 
