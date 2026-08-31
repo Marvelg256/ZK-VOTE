@@ -53,19 +53,14 @@ export interface RevocationStatus {
   commitment: string;
 }
 
-/**
- * Verify that a member has been revoked and cannot vote
- * Checks both ZK exclusion proof and contract revocation status
- */
 export async function verifyExclusionProof(
   proof: ExclusionProof,
-  treeContractId: string,
-): Promise<{
-  valid: boolean;
-  reason?: string;
-}> {
+  _treeContractId: string,
+): Promise<{ valid: boolean; reason?: string }> {
   try {
     const { commitment, daoId, historicalRoot, currentRoot } = proof.publicInputs;
+    if (!historicalRoot || !currentRoot) return { valid: false, reason: "Invalid root" };
+    if (!isValidFieldElement(commitment)) return { valid: false, reason: "Invalid commitment format" };
 
     deps().log("info", "exclusion_proof_verification_started", {
       commitment: commitment.slice(0, 10),
@@ -136,14 +131,12 @@ export async function verifyExclusionProof(
         reason: "Could not verify revocation status",
       };
     }
+    return { valid: true };
   } catch (err) {
     deps().log("error", "exclusion_proof_verification_error", {
       error: (err as Error).message,
     });
-    return {
-      valid: false,
-      reason: "Proof verification failed",
-    };
+    return { valid: false, reason: "Proof verification failed" };
   }
 }
 
@@ -180,24 +173,16 @@ async function checkRevocationStatus(
   };
 }
 
-/**
- * Validate that a value is a valid field element
- * BN254 prime: 21888242871839275222246405745257275088548364400416034343698204186575808495617
- */
 function isValidFieldElement(value: string): boolean {
   try {
-    const BN254_PRIME =
-      21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+    const prime = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
     const num = BigInt(value);
-    return num < BN254_PRIME && num >= 0n;
+    return num >= 0n && num < prime;
   } catch {
     return false;
   }
 }
 
-/**
- * Record a revocation in the database for audit trail
- */
 export async function recordRevocation(
   commitment: string,
   daoId: number,
@@ -217,9 +202,6 @@ export async function recordRevocation(
   }
 }
 
-/**
- * Reinstate a revoked member
- */
 export async function recordReinstatement(
   commitment: string,
   daoId: number,

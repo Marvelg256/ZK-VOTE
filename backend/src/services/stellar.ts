@@ -22,6 +22,7 @@ import {
   CircuitBreakerOpenError,
   type CircuitBreaker,
 } from "./circuit-breaker.js";
+import { withSpan } from "./tracing.js";
 import type { Groth16Proof } from "../types/index.js";
 import { BN254_FQ_MODULUS } from "../types/index.js";
 import type { RpcServerPort } from "./interfaces.js";
@@ -459,28 +460,45 @@ export const server: SorobanServer = createSorobanServer({
 // ============================================
 
 /**
- * Call RPC with timeout
+ * Call RPC with timeout.
+ *
+ * Every RPC hop opens a child span under whatever is ambient (#321) — an HTTP
+ * request or an indexer poll cycle — so a single trace covers poll -> db -> rpc
+ * without the caller passing a context. The span records only the operation
+ * label and the deadline; request payloads stay out of telemetry because they
+ * carry proofs and nullifiers.
  */
 export async function callWithTimeout<T>(
   fn: () => Promise<T>,
   label: string,
 ): Promise<T> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  return withSpan(
+    "relay.rpc.call",
+    {
+      component: "stellar",
+      "rpc.operation": label,
+      "rpc.timeout_ms": config.rpcTimeoutMs,
+    },
+    async () => {
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
-  const timeout = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(
-      () => reject(new Error(`Timeout: ${label} (${config.rpcTimeoutMs}ms)`)),
-      config.rpcTimeoutMs,
-    );
-  });
+      const timeout = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () =>
+            reject(new Error(`Timeout: ${label} (${config.rpcTimeoutMs}ms)`)),
+          config.rpcTimeoutMs,
+        );
+      });
 
-  try {
-    return await Promise.race([fn(), timeout]);
-  } finally {
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-    }
-  }
+      try {
+        return await Promise.race([fn(), timeout]);
+      } finally {
+        if (timeoutId !== undefined) {
+          clearTimeout(timeoutId);
+        }
+      }
+    },
+  );
 }
 
 /**

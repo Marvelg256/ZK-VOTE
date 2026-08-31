@@ -402,6 +402,13 @@ export function auditMiddleware(req: Request, res: Response, next: NextFunction)
  * Synchronous helper to manually audit an action inside route handlers.
  * Use when you need to record audit with custom action name or extra context.
  */
+export function auditLog(action: string): (req: Request, res: Response, next: NextFunction) => void {
+  return (req, _res, next) => {
+    auditAction(req, action);
+    next();
+  };
+}
+
 export function auditAction(
   req: Request,
   action: string,
@@ -421,4 +428,24 @@ export function auditAction(
     statusCode: extra?.statusCode,
     userAgent: (req.headers["user-agent"] as string) || undefined,
   });
+}
+
+/**
+ * Route-level audit middleware factory. Attaches an immutable, redacted audit
+ * entry for the named action when the response finishes, then continues.
+ * Used by route modules as `auditLog("vote")`.
+ */
+export function auditLog(
+  action: string,
+): (req: Request, res: Response, next: NextFunction) => void {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    res.on("finish", () => {
+      try {
+        auditAction(req, action, { statusCode: res.statusCode });
+      } catch (_e) {
+        // Never fail the request because auditing failed.
+      }
+    });
+    next();
+  };
 }

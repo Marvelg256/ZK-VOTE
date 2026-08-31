@@ -7,7 +7,7 @@
  */
 
 import cluster from "node:cluster";
-import express, { type Express } from "express";
+import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import swaggerUi from "swagger-ui-express";
@@ -38,6 +38,10 @@ import {
   performInitialCheckpoint,
   detectAndHandleWalIssue,
 } from "./services/walResilience.js";
+import {
+  startScheduledBackups,
+  stopScheduledBackups,
+} from "./services/backup.js";
 import {
   startMonitor as startPinMonitor,
   stopMonitor as stopPinMonitor,
@@ -89,6 +93,8 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
+  analyticsRoutes,
+  encryptionRoutes,
 } from "./routes/index.js";
 import metricsRoutes from "./routes/metrics.js";
 import remediationRoutes from "./routes/remediation.js";
@@ -100,6 +106,7 @@ import openApiSpec from "./openapi.js";
 // ============================================
 
 validateEnv();
+initializeTelemetry();
 
 // ============================================
 // COMPOSITION ROOT (#358)
@@ -214,12 +221,28 @@ app.use(cors(corsOptions));
 // Logging middleware
 app.use(requestLogger);
 
-// Audit middleware - must be after body parsing and requestLogger, before routes
-// Audits every mutating route (POST/PUT/PATCH/DELETE) with PII redaction, append-only
-app.use(auditMiddleware);
+// Graduated throttling (delays before a client is hard rate-limited)
+app.use(graduatedSlowDown);
 
-// CSRF protection (applied globally)
+// CSRF token generation for safe methods (GET, HEAD, OPTIONS)
+app.use(csrfTokenMiddleware);
+
+// CSRF protection (applied globally for write methods)
 app.use(csrfGuard);
+
+// ============================================
+// CSRF TOKEN ENDPOINT
+// ============================================
+
+// Dedicated endpoint for CSRF token issuance.
+// The SPA calls GET /csrf-token on startup and stores the X-CSRF-Token
+// response header value.  The csrfTokenMiddleware (applied globally above)
+// handles the actual token generation for all GET requests; this route
+// just provides a predictable, documented URL for the frontend to target.
+app.get("/csrf-token", (_req, res) => {
+  // Token is already set in the response header by csrfTokenMiddleware.
+  res.json({ ok: true });
+});
 
 // ============================================
 // ROUTE INITIALIZATION
@@ -232,7 +255,6 @@ initIndexerRoutes(triggerDaoMembershipSync);
 // Mount route handlers (metrics first, before CSRF/auth middleware)
 app.use(metricsRoutes);
 app.use(healthRoutes);
-app.use(remediationRoutes);
 app.use(noStore, votingRoutes);
 app.use(daoRoutes);
 app.use(ipfsRoutes);
@@ -241,6 +263,26 @@ app.use(claimRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
+// OpenAPI spec endpoints (public, no audit log pollution for the spec itself)
+app.get("/api-docs/openapi.json", (_req, res) => {
+  res.json(buildOpenApiDocument());
+});
+
+// Interactive Swagger UI at /api-docs (relaxes the global CSP for itself)
+app.use(
+  "/api-docs",
+  (req: Request, res: Response, next: NextFunction) => {
+    res.setHeader(
+      "Content-Security-Policy",
+      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';",
+    );
+    next();
+  },
+  swaggerUi.serve,
+  swaggerUi.setup(buildOpenApiDocument() as object, {
+    swaggerOptions: { url: "/api-docs/openapi.json" },
+  }),
+);
 
 // OpenAPI spec endpoint (public, no audit-log pollution for the spec itself)
 app.get("/openapi.json", (_req, res) => {
@@ -308,7 +350,7 @@ async function gracefulShutdown(reason: string): Promise<void> {
     });
   });
 
-  stopBackgroundServices();
+  await stopBackgroundServices();
   stopAuthScheduler();
   stopWalResilience();
   log("info", "shutdown_component_stopped", {
@@ -453,6 +495,10 @@ async function startBackgroundServices(): Promise<void> {
     startWalCheckpointing(database);
     startWalMonitor(database, dbPath);
     startPeriodicBackups(database, dbPath);
+    // Encrypted snapshot backups (#359) — opt-in via BACKUP_ENCRYPTION_ENABLED.
+    if (config.backupEncryptionEnabled) {
+      startScheduledBackups(config.backupIntervalMs);
+    }
   } catch (err) {
     log("warn", "wal_resilience_start_failed", {
       error: (err as Error).message,
@@ -468,19 +514,28 @@ async function startBackgroundServices(): Promise<void> {
   });
 }
 
-function stopBackgroundServices(): void {
+/**
+ * Stop every background loop.
+ *
+ * Awaits the indexer specifically: its scheduler cancels an in-flight poll
+ * cycle and closes the database only once that cycle has unwound (#323), so a
+ * shutdown that did not await it could close the HTTP server while a poll was
+ * still writing.
+ */
+async function stopBackgroundServices(): Promise<void> {
   if (!backgroundServicesStarted) return;
   backgroundServicesStarted = false;
 
   log("info", "stopping_background_services", { pid: process.pid });
 
-  stopIndexer();
+  await stopIndexer();
   stopDaoSync();
   stopMembershipSync();
   stopTTLRenewal();
   stopSbtTransferWatch();
   stopPinMonitor();
   stopMemoryMonitor();
+  stopScheduledBackups();
 }
 
 // ============================================
@@ -564,7 +619,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
             log("info", "worker_demoted_stopping_background_services", {
               pid: process.pid,
             });
-            stopBackgroundServices();
+            await stopBackgroundServices();
           }
         });
 
