@@ -7,7 +7,7 @@
  */
 
 import cluster from "node:cluster";
-import express, { type Express } from "express";
+import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import { registerShutdownHandler } from "./routes/admin.js";
@@ -82,8 +82,8 @@ import {
   requestLogger,
   errorHandler,
   auditMiddleware,
-  degradationContext,
   metricsMiddleware,
+  degradationContext,
 } from "./middleware/index.js";
 
 // Routes
@@ -102,7 +102,7 @@ import {
   analyticsRoutes,
   encryptionRoutes,
 } from "./routes/index.js";
-import { registerShutdownHandler } from "./routes/admin.js";
+import metricsRoutes from "./routes/metrics.js";
 
 // ============================================
 // ENVIRONMENT VALIDATION
@@ -250,7 +250,6 @@ initIndexerRoutes(triggerDaoMembershipSync);
 // Mount route handlers (metrics first, before CSRF/auth middleware)
 app.use(metricsRoutes);
 app.use(healthRoutes);
-app.use(remediationRoutes);
 app.use(noStore, votingRoutes);
 app.use(daoRoutes);
 app.use(ipfsRoutes);
@@ -259,8 +258,26 @@ app.use(claimRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
-app.use(analyticsRoutes);
-app.use(noStore, encryptionRoutes);
+// OpenAPI spec endpoints (public, no audit log pollution for the spec itself)
+app.get("/api-docs/openapi.json", (_req, res) => {
+  res.json(buildOpenApiDocument());
+});
+
+// Interactive Swagger UI at /api-docs (relaxes the global CSP for itself)
+app.use(
+  "/api-docs",
+  (req: Request, res: Response, next: NextFunction) => {
+    res.setHeader(
+      "Content-Security-Policy",
+      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';",
+    );
+    next();
+  },
+  swaggerUi.serve,
+  swaggerUi.setup(buildOpenApiDocument() as object, {
+    swaggerOptions: { url: "/api-docs/openapi.json" },
+  }),
+);
 
 // Global error handler (must be last)
 app.use(errorHandler);

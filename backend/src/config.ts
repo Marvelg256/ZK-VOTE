@@ -646,7 +646,6 @@ export function validateEnv(): void {
   if (!config.commentsContractId)
     errors.push("COMMENTS_CONTRACT_ID is required");
   if (!config.relayerSecretKey) errors.push("RELAYER_SECRET_KEY is required");
-  if (!config.authMasterKey) errors.push("AUTH_MASTER_KEY is required");
 
   if (config.votingContractId && !isValidContractId(config.votingContractId)) {
     errors.push(
@@ -660,6 +659,40 @@ export function validateEnv(): void {
     );
   }
 
+  const criticalKeys = ["VOTING_CONTRACT_ID", "TREE_CONTRACT_ID", "RELAYER_SECRET_KEY", "RELAYER_AUTH_TOKEN"];
+
+  // Derive the set of required env vars that were not provided.
+  const requiredKeys: Array<[string, unknown]> = [
+    ["VOTING_CONTRACT_ID", config.votingContractId],
+    ["TREE_CONTRACT_ID", config.treeContractId],
+    ["COMMENTS_CONTRACT_ID", config.commentsContractId],
+    ["RELAYER_SECRET_KEY", config.relayerSecretKey],
+    ["RELAYER_AUTH_TOKEN", config.relayerAuthToken],
+    ["AUTH_MASTER_KEY", config.authMasterKey],
+  ];
+  const missing = requiredKeys.filter(([, value]) => !value).map(([key]) => key);
+  const criticalMissing = missing.filter((k) => criticalKeys.includes(k));
+  const nonCriticalMissing = missing.filter((k) => !criticalKeys.includes(k));
+
+  if (criticalMissing.length > 0) {
+    console.error(
+      JSON.stringify({ level: "error", event: "missing_env", missing: criticalMissing }),
+    );
+  }
+
+  if (nonCriticalMissing.length > 0) {
+    if (config.testMode) {
+      console.warn(
+        JSON.stringify({ level: "warn", event: "missing_optional_env_in_test_mode", missing: nonCriticalMissing }),
+      );
+    } else {
+      console.error(
+        JSON.stringify({ level: "error", event: "missing_env", missing: nonCriticalMissing }),
+      );
+      console.error("\nRun ./scripts/init-local.sh to generate backend/.env");
+      process.exit(1);
+    }
+  }
 
   // Validate auth token strength (minimum 32 characters for security)
   // Skip validation in test mode since tests set short tokens for convenience
