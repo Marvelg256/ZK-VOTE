@@ -243,15 +243,12 @@ fn test_privacy_analytics_homomorphic_accumulation() {
 
     // Real on-curve BN254 G1 points: generator G=(1,2) (4 = 1³ + 3) scaled by 1 and 2
     // via the host g1_mul, so both lie on the curve and the host g1_add accepts them.
-    let gen = Bn254G1Affine::from_bytes(soroban_sdk::BytesN::from_array(
-        &env,
-        &{
-            let mut b = [0u8; 64];
-            b[31] = 1; // x = 1
-            b[63] = 2; // y = 2
-            b
-        },
-    ));
+    let gen = Bn254G1Affine::from_bytes(soroban_sdk::BytesN::from_array(&env, &{
+        let mut b = [0u8; 64];
+        b[31] = 1; // x = 1
+        b[63] = 2; // y = 2
+        b
+    }));
     let c1_a = env
         .crypto()
         .bn254()
@@ -287,15 +284,12 @@ fn test_privacy_analytics_below_min_cohort_rejected() {
     let round_id = 1u64;
 
     client.init_analytics(&5u32, &admin); // min cohort 5
-    let gen = Bn254G1Affine::from_bytes(soroban_sdk::BytesN::from_array(
-        &env,
-        &{
-            let mut b = [0u8; 64];
-            b[31] = 1;
-            b[63] = 2;
-            b
-        },
-    ));
+    let gen = Bn254G1Affine::from_bytes(soroban_sdk::BytesN::from_array(&env, &{
+        let mut b = [0u8; 64];
+        b[31] = 1;
+        b[63] = 2;
+        b
+    }));
     let c1 = env
         .crypto()
         .bn254()
@@ -320,15 +314,12 @@ fn test_privacy_analytics_duplicate_contributor_rejected() {
     let round_id = 1u64;
 
     client.init_analytics(&1u32, &admin);
-    let gen = Bn254G1Affine::from_bytes(soroban_sdk::BytesN::from_array(
-        &env,
-        &{
-            let mut b = [0u8; 64];
-            b[31] = 1;
-            b[63] = 2;
-            b
-        },
-    ));
+    let gen = Bn254G1Affine::from_bytes(soroban_sdk::BytesN::from_array(&env, &{
+        let mut b = [0u8; 64];
+        b[31] = 1;
+        b[63] = 2;
+        b
+    }));
     let c1 = env
         .crypto()
         .bn254()

@@ -1,7 +1,7 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
-    crypto::bn254::Bn254G1Affine, Env, Symbol, Vec, U256,
+    contract, contracterror, contractimpl, contracttype, crypto::bn254::Bn254G1Affine,
+    panic_with_error, symbol_short, Address, Env, Symbol, Vec, U256,
 };
 
 const ADMIN_KEY: Symbol = symbol_short!("admin");
@@ -54,12 +54,12 @@ pub struct DkgConfig {
 pub enum DataKey {
     Config,
     Participant(Address),
-    ParticipantList,          // Vec<Address>
-    Share(Address),           // U256 share per participant
-    ShareCount,               // u32
-    FinalKey,                 // U256 aggregated key
-    AnalyticsCfg,             // u32 minimum cohort (privacy budget)
-    AnalyticsAggregate(u64, u64),        // (dao_id, round_id) -> AnalyticsAggregate
+    ParticipantList,                       // Vec<Address>
+    Share(Address),                        // U256 share per participant
+    ShareCount,                            // u32
+    FinalKey,                              // U256 aggregated key
+    AnalyticsCfg,                          // u32 minimum cohort (privacy budget)
+    AnalyticsAggregate(u64, u64),          // (dao_id, round_id) -> AnalyticsAggregate
     AnalyticsSubmitted(u64, u64, Address), // (dao_id, round_id, address) -> bool
 }
 
@@ -81,9 +81,9 @@ pub enum DataKey {
 #[contracttype]
 #[derive(Clone)]
 pub struct AnalyticsAggregate {
-    pub c1: Bn254G1Affine,           // Σ r_i·G
-    pub c2: Bn254G1Affine,           // (Σ m_i)·G + R·Y
-    pub contribution_count: u64,     // number of accumulated contributions
+    pub c1: Bn254G1Affine,       // Σ r_i·G
+    pub c2: Bn254G1Affine,       // (Σ m_i)·G + R·Y
+    pub contribution_count: u64, // number of accumulated contributions
 }
 
 #[contract]
@@ -124,7 +124,9 @@ impl ThresholdCrypto {
         env.storage().instance().set(&CONFIG_KEY, &cfg);
         env.storage().instance().set(&ADMIN_KEY, &admin);
         env.storage().instance().set(&VERSION_KEY, &VERSION);
-        env.storage().persistent().set(&DataKey::ParticipantList, &Vec::<Address>::new(&env));
+        env.storage()
+            .persistent()
+            .set(&DataKey::ParticipantList, &Vec::<Address>::new(&env));
         env.storage().persistent().set(&DataKey::ShareCount, &0u32);
         env.storage().instance().set(&FINALIZED_KEY, &false);
         Self::bump_instance(&env);
@@ -146,7 +148,11 @@ impl ThresholdCrypto {
         if cfg.finalized {
             panic_with_error!(&env, ThresholdError::AlreadyFinalized);
         }
-        if env.storage().persistent().has(&DataKey::Participant(participant.clone())) {
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Participant(participant.clone()))
+        {
             panic_with_error!(&env, ThresholdError::ParticipantExists);
         }
         let mut list: Vec<Address> = env
@@ -162,7 +168,9 @@ impl ThresholdCrypto {
             .set(&DataKey::Participant(participant.clone()), &true);
         Self::bump_persistent(&env, &DataKey::Participant(participant.clone()));
         list.push_back(participant);
-        env.storage().persistent().set(&DataKey::ParticipantList, &list);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ParticipantList, &list);
     }
 
     /// Submit share (participant only)
@@ -177,10 +185,18 @@ impl ThresholdCrypto {
         if cfg.finalized {
             panic_with_error!(&env, ThresholdError::AlreadyFinalized);
         }
-        if !env.storage().persistent().has(&DataKey::Participant(participant.clone())) {
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::Participant(participant.clone()))
+        {
             panic_with_error!(&env, ThresholdError::NotParticipant);
         }
-        if env.storage().persistent().has(&DataKey::Share(participant.clone())) {
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Share(participant.clone()))
+        {
             panic_with_error!(&env, ThresholdError::AlreadySubmitted);
         }
         if share == U256::from_u32(&env, 0) {
@@ -233,7 +249,11 @@ impl ThresholdCrypto {
         let mut agg = U256::from_u32(&env, 0);
         for i in 0..participants.len() {
             let addr = participants.get(i).unwrap();
-            if let Some(s) = env.storage().persistent().get::<DataKey, U256>(&DataKey::Share(addr)) {
+            if let Some(s) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, U256>(&DataKey::Share(addr))
+            {
                 agg = agg.add(&s);
             }
         }
@@ -287,7 +307,10 @@ impl ThresholdCrypto {
 
     pub fn is_finalized(env: Env) -> bool {
         Self::bump_instance(&env);
-        env.storage().instance().get(&FINALIZED_KEY).unwrap_or(false)
+        env.storage()
+            .instance()
+            .get(&FINALIZED_KEY)
+            .unwrap_or(false)
     }
 
     pub fn get_final_key(env: Env) -> U256 {
@@ -303,7 +326,10 @@ impl ThresholdCrypto {
 
     pub fn version(env: Env) -> u32 {
         Self::bump_instance(&env);
-        env.storage().instance().get(&VERSION_KEY).unwrap_or(VERSION)
+        env.storage()
+            .instance()
+            .get(&VERSION_KEY)
+            .unwrap_or(VERSION)
     }
 
     // ===== Privacy Analytics (#306) =====
@@ -346,8 +372,7 @@ impl ThresholdCrypto {
         contributor.require_auth();
 
         // One contribution per contributor per round.
-        let submitted_key =
-            DataKey::AnalyticsSubmitted(dao_id, round_id, contributor.clone());
+        let submitted_key = DataKey::AnalyticsSubmitted(dao_id, round_id, contributor.clone());
         if env.storage().persistent().has(&submitted_key) {
             panic_with_error!(&env, ThresholdError::AlreadySubmitted);
         }
@@ -357,15 +382,15 @@ impl ThresholdCrypto {
         let agg_key = DataKey::AnalyticsAggregate(dao_id, round_id);
         // Identity element for g1_add is the point at infinity: 64 zero bytes.
         let identity = |env: &Env| Bn254G1Affine::from_array(&env, &[0u8; 64]);
-        let mut agg: AnalyticsAggregate = env
-            .storage()
-            .persistent()
-            .get(&agg_key)
-            .unwrap_or_else(|| AnalyticsAggregate {
-                c1: identity(&env),
-                c2: identity(&env),
-                contribution_count: 0,
-            });
+        let mut agg: AnalyticsAggregate =
+            env.storage()
+                .persistent()
+                .get(&agg_key)
+                .unwrap_or_else(|| AnalyticsAggregate {
+                    c1: identity(&env),
+                    c2: identity(&env),
+                    contribution_count: 0,
+                });
         agg.c1 = env.crypto().bn254().g1_add(&agg.c1, &c1);
         agg.c2 = env.crypto().bn254().g1_add(&agg.c2, &c2);
         agg.contribution_count += 1;
@@ -377,19 +402,13 @@ impl ThresholdCrypto {
     /// refusing to reveal it until the minimum cohort (privacy budget) has been
     /// met. Once released, it is still encrypted: only a threshold of key shares
     /// can decrypt `Σ m_i` off-chain.
-    pub fn analytics_aggregate(
-        env: Env,
-        dao_id: u64,
-        round_id: u64,
-    ) -> AnalyticsAggregate {
+    pub fn analytics_aggregate(env: Env, dao_id: u64, round_id: u64) -> AnalyticsAggregate {
         Self::bump_instance(&env);
         let min_cohort: u32 = env
             .storage()
             .instance()
             .get(&DataKey::AnalyticsCfg)
-            .unwrap_or_else(|| {
-                panic_with_error!(&env, ThresholdError::AnalyticsNotConfigured)
-            });
+            .unwrap_or_else(|| panic_with_error!(&env, ThresholdError::AnalyticsNotConfigured));
         let agg_key = DataKey::AnalyticsAggregate(dao_id, round_id);
         let agg: AnalyticsAggregate = env
             .storage()
