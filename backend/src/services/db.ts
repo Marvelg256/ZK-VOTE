@@ -1193,6 +1193,16 @@ export function initDb(dbPath?: string): DatabaseType {
       PRIMARY KEY (comment_id, dao_id, proposal_id)
     );
 
+    CREATE TABLE IF NOT EXISTS member_revocations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      commitment TEXT NOT NULL,
+      dao_id INTEGER NOT NULL,
+      revoked_at INTEGER NOT NULL,
+      reinstated_at INTEGER,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(commitment, dao_id)
+    );
+
     CREATE TABLE IF NOT EXISTS ttl_tracking (
       entry_id TEXT PRIMARY KEY,
       contract_id TEXT NOT NULL,

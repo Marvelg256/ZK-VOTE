@@ -441,6 +441,7 @@ export const config = {
   commentsContractId: process.env.COMMENTS_CONTRACT_ID,
   daoRegistryContractId: process.env.DAO_REGISTRY_CONTRACT_ID,
   membershipSbtContractId: process.env.MEMBERSHIP_SBT_CONTRACT_ID,
+  rewardsContractId: validatedEnv.REWARDS_CONTRACT_ID,
   bridgeContractId: process.env.BRIDGE_CONTRACT_ID,
   circuitRegistryContractId: process.env.CIRCUIT_REGISTRY_CONTRACT_ID,
 
@@ -646,6 +647,10 @@ export function validateEnv(): void {
   if (!config.commentsContractId)
     errors.push("COMMENTS_CONTRACT_ID is required");
   if (!config.relayerSecretKey) errors.push("RELAYER_SECRET_KEY is required");
+  // AUTH_MASTER_KEY is a production-only control-plane credential; tests and
+  // local dev don't need it (kept out of the critical path in test mode).
+  if (!config.authMasterKey && !config.testMode)
+    errors.push("AUTH_MASTER_KEY is required");
 
   if (config.votingContractId && !isValidContractId(config.votingContractId)) {
     errors.push(
@@ -658,6 +663,16 @@ export function validateEnv(): void {
       `TREE_CONTRACT_ID "${config.treeContractId}" is not a valid Stellar contract ID`,
     );
   }
+
+  const missing: string[] = [];
+  if (!config.votingContractId) missing.push("VOTING_CONTRACT_ID");
+  if (!config.treeContractId) missing.push("TREE_CONTRACT_ID");
+  if (!config.commentsContractId) missing.push("COMMENTS_CONTRACT_ID");
+  if (!config.relayerSecretKey) missing.push("RELAYER_SECRET_KEY");
+  if (!config.rpcUrl) missing.push("SOROBAN_RPC_URL");
+  if (!config.networkPassphrase) missing.push("NETWORK_PASSPHRASE");
+  if (!config.relayerAuthToken) missing.push("RELAYER_AUTH_TOKEN");
+  if (!config.authMasterKey) missing.push("AUTH_MASTER_KEY");
 
   const criticalKeys = ["VOTING_CONTRACT_ID", "TREE_CONTRACT_ID", "RELAYER_SECRET_KEY", "RELAYER_AUTH_TOKEN"];
 
@@ -743,7 +758,25 @@ export function validateEnv(): void {
     );
   }
 
-  if (config.commentsContractId && !isValidContractId(config.commentsContractId)) {
+  if (
+    config.commentsContractId &&
+    !isValidContractId(config.commentsContractId)
+  ) {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: "invalid_contract_id",
+        var: "COMMENTS_CONTRACT_ID",
+        value: config.commentsContractId,
+      }),
+    );
+    process.exit(1);
+  }
+
+  if (
+    config.rewardsContractId &&
+    !isValidContractId(config.rewardsContractId)
+  ) {
     console.error(
       JSON.stringify({
         level: "error",

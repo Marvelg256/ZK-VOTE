@@ -11,6 +11,7 @@ export { requestLogger } from "./logging.js";
 export { errorHandler } from "./errorHandler.js";
 export {
   auditMiddleware,
+  auditLog,
   redactPii,
   redactBody,
   appendAudit,

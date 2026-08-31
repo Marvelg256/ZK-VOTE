@@ -10,11 +10,11 @@ import cluster from "node:cluster";
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import helmet from "helmet";
-import { registerShutdownHandler } from "./routes/admin.js";
-import { initializeTelemetry } from "./services/otel.js";
+import swaggerUi from "swagger-ui-express";
 
-// Configuration and types
 import { config, validateEnv, isValidContractId } from "./config.js";
+// Composition root (#358) — explicit construction/wiring of service deps.
+import { buildAppServices } from "./composition-root.js";
 
 // Cluster Service
 import {
@@ -46,12 +46,6 @@ import {
   startMonitor as startPinMonitor,
   stopMonitor as stopPinMonitor,
 } from "./services/ipfs-monitor.js";
-import {
-  server,
-  relayerKeypair,
-  getPendingSequenceLockOps,
-  waitForSequenceLockIdle,
-} from "./services/stellar.js";
 import {
   startDaoSync,
   stopDaoSync,
@@ -103,6 +97,9 @@ import {
   encryptionRoutes,
 } from "./routes/index.js";
 import metricsRoutes from "./routes/metrics.js";
+import remediationRoutes from "./routes/remediation.js";
+import { registerShutdownHandler } from "./routes/admin.js";
+import openApiSpec from "./openapi.js";
 
 // ============================================
 // ENVIRONMENT VALIDATION
@@ -110,6 +107,14 @@ import metricsRoutes from "./routes/metrics.js";
 
 validateEnv();
 initializeTelemetry();
+
+// ============================================
+// COMPOSITION ROOT (#358)
+// ============================================
+// Build and wire every service's dependencies explicitly. Consumer services
+// get their deps from this container, not from module-level globals.
+
+const services = buildAppServices();
 
 // ============================================
 // EXPRESS APP SETUP
@@ -244,7 +249,7 @@ app.get("/csrf-token", (_req, res) => {
 // ============================================
 
 // Initialize routes that need dependencies
-initHealthRoutes(server, relayerKeypair.publicKey());
+initHealthRoutes(services.stellar.server, services.stellar.relayerKeypair.publicKey());
 initIndexerRoutes(triggerDaoMembershipSync);
 
 // Mount route handlers (metrics first, before CSRF/auth middleware)
@@ -279,6 +284,14 @@ app.use(
   }),
 );
 
+// OpenAPI spec endpoint (public, no audit-log pollution for the spec itself)
+app.get("/openapi.json", (_req, res) => {
+  res.json(openApiSpec);
+});
+// Interactive API docs (the CSP comment above intentionally relaxes policy
+// for this route so swagger-ui can render).
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
+
 // Global error handler (must be last)
 app.use(errorHandler);
 
@@ -312,7 +325,7 @@ async function gracefulShutdown(reason: string): Promise<void> {
     log("warn", "shutdown_forced", {
       reason,
       timeoutMs: DRAIN_TIMEOUT_MS,
-      pendingSequenceLockOps: getPendingSequenceLockOps(),
+      pendingSequenceLockOps: services.stellar.getPendingSequenceLockOps(),
       pid: process.pid,
     });
     process.exit(1);
@@ -346,16 +359,18 @@ async function gracefulShutdown(reason: string): Promise<void> {
 
   await httpClosed;
 
-  const pending = getPendingSequenceLockOps();
-  if (pending > 0) {
-    log("info", "shutdown_draining_sequence_lock", { pending });
-  }
-  const drained = await waitForSequenceLockIdle(DRAIN_TIMEOUT_MS);
+  // Drain any in-flight sequence-locked chain submissions (they can outlive
+  // the HTTP response — a proof accepted but never submitted is a real loss).
+  const drained = await services.stellar.waitForSequenceLockIdle(
+    DRAIN_TIMEOUT_MS,
+  );
   log(drained ? "info" : "warn", "shutdown_sequence_lock_drained", {
     drained,
-    remaining: getPendingSequenceLockOps(),
+    remaining: services.stellar.getPendingSequenceLockOps(),
   });
 
+  // Close the SQLite connection cleanly (checkpoints WAL, avoids corruption
+  // on restart).
   try {
     closeDb();
     log("info", "shutdown_component_stopped", { component: "database" });
@@ -436,7 +451,7 @@ async function startBackgroundServices(): Promise<void> {
     try {
       await startIndexer(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        server as any,
+        services.stellar.server as any,
         contractIds,
         config.indexerPollIntervalMs,
       );
@@ -542,7 +557,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         isLeader: isLeaderWorker(),
         network: config.networkPassphrase,
         rpcUrl: config.rpcUrl,
-        relayer: relayerKeypair.publicKey(),
+        relayer: services.stellar.relayerKeypair.publicKey(),
       });
 
       console.log(`\nZKVote Relayer running on http://localhost:${PORT}`);
