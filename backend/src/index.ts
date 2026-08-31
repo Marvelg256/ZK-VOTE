@@ -7,15 +7,14 @@
  */
 
 import cluster from "node:cluster";
-import express, { type Express } from "express";
+import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import swaggerUi from "swagger-ui-express";
 
-import { buildOpenApiDocument } from "./openapi.js";
-
-// Configuration and types
 import { config, validateEnv, isValidContractId } from "./config.js";
+// Composition root (#358) — explicit construction/wiring of service deps.
+import { buildAppServices } from "./composition-root.js";
 
 // Cluster Service
 import {
@@ -40,15 +39,13 @@ import {
   detectAndHandleWalIssue,
 } from "./services/walResilience.js";
 import {
+  startScheduledBackups,
+  stopScheduledBackups,
+} from "./services/backup.js";
+import {
   startMonitor as startPinMonitor,
   stopMonitor as stopPinMonitor,
 } from "./services/ipfs-monitor.js";
-import {
-  server,
-  relayerKeypair,
-  getPendingSequenceLockOps,
-  waitForSequenceLockIdle,
-} from "./services/stellar.js";
 import {
   startDaoSync,
   stopDaoSync,
@@ -101,6 +98,9 @@ import {
   remediationRoutes,
   registerShutdownHandler,
 } from "./routes/index.js";
+import metricsRoutes from "./routes/metrics.js";
+import remediationRoutes from "./routes/remediation.js";
+import { registerShutdownHandler } from "./routes/admin.js";
 import openApiSpec from "./openapi.js";
 
 // ============================================
@@ -108,6 +108,15 @@ import openApiSpec from "./openapi.js";
 // ============================================
 
 validateEnv();
+initializeTelemetry();
+
+// ============================================
+// COMPOSITION ROOT (#358)
+// ============================================
+// Build and wire every service's dependencies explicitly. Consumer services
+// get their deps from this container, not from module-level globals.
+
+const services = buildAppServices();
 
 // ============================================
 // EXPRESS APP SETUP
@@ -214,25 +223,40 @@ app.use(cors(corsOptions));
 // Logging middleware
 app.use(requestLogger);
 
-// Audit middleware - must be after body parsing and requestLogger, before routes
-// Audits every mutating route (POST/PUT/PATCH/DELETE) with PII redaction, append-only
-app.use(auditMiddleware);
+// Graduated throttling (delays before a client is hard rate-limited)
+app.use(graduatedSlowDown);
 
-// CSRF protection (applied globally)
+// CSRF token generation for safe methods (GET, HEAD, OPTIONS)
+app.use(csrfTokenMiddleware);
+
+// CSRF protection (applied globally for write methods)
 app.use(csrfGuard);
+
+// ============================================
+// CSRF TOKEN ENDPOINT
+// ============================================
+
+// Dedicated endpoint for CSRF token issuance.
+// The SPA calls GET /csrf-token on startup and stores the X-CSRF-Token
+// response header value.  The csrfTokenMiddleware (applied globally above)
+// handles the actual token generation for all GET requests; this route
+// just provides a predictable, documented URL for the frontend to target.
+app.get("/csrf-token", (_req, res) => {
+  // Token is already set in the response header by csrfTokenMiddleware.
+  res.json({ ok: true });
+});
 
 // ============================================
 // ROUTE INITIALIZATION
 // ============================================
 
 // Initialize routes that need dependencies
-initHealthRoutes(server, relayerKeypair.publicKey());
+initHealthRoutes(services.stellar.server, services.stellar.relayerKeypair.publicKey());
 initIndexerRoutes(triggerDaoMembershipSync);
 
 // Mount route handlers (metrics first, before CSRF/auth middleware)
 app.use(metricsRoutes);
 app.use(healthRoutes);
-app.use(remediationRoutes);
 app.use(noStore, votingRoutes);
 app.use(daoRoutes);
 app.use(ipfsRoutes);
@@ -276,7 +300,7 @@ async function gracefulShutdown(reason: string): Promise<void> {
     log("warn", "shutdown_forced", {
       reason,
       timeoutMs: DRAIN_TIMEOUT_MS,
-      pendingSequenceLockOps: getPendingSequenceLockOps(),
+      pendingSequenceLockOps: services.stellar.getPendingSequenceLockOps(),
       pid: process.pid,
     });
     process.exit(1);
@@ -301,7 +325,7 @@ async function gracefulShutdown(reason: string): Promise<void> {
     });
   });
 
-  stopBackgroundServices();
+  await stopBackgroundServices();
   stopAuthScheduler();
   stopWalResilience();
   log("info", "shutdown_component_stopped", {
@@ -386,7 +410,7 @@ async function startBackgroundServices(): Promise<void> {
     try {
       await startIndexer(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        server as any,
+        services.stellar.server as any,
         contractIds,
         config.indexerPollIntervalMs,
       );
@@ -430,6 +454,10 @@ async function startBackgroundServices(): Promise<void> {
     startWalCheckpointing(database);
     startWalMonitor(database, dbPath);
     startPeriodicBackups(database, dbPath);
+    // Encrypted snapshot backups (#359) — opt-in via BACKUP_ENCRYPTION_ENABLED.
+    if (config.backupEncryptionEnabled) {
+      startScheduledBackups(config.backupIntervalMs);
+    }
   } catch (err) {
     log("warn", "wal_resilience_start_failed", {
       error: (err as Error).message,
@@ -445,19 +473,28 @@ async function startBackgroundServices(): Promise<void> {
   });
 }
 
-function stopBackgroundServices(): void {
+/**
+ * Stop every background loop.
+ *
+ * Awaits the indexer specifically: its scheduler cancels an in-flight poll
+ * cycle and closes the database only once that cycle has unwound (#323), so a
+ * shutdown that did not await it could close the HTTP server while a poll was
+ * still writing.
+ */
+async function stopBackgroundServices(): Promise<void> {
   if (!backgroundServicesStarted) return;
   backgroundServicesStarted = false;
 
   log("info", "stopping_background_services", { pid: process.pid });
 
-  stopIndexer();
+  await stopIndexer();
   stopDaoSync();
   stopMembershipSync();
   stopTTLRenewal();
   stopSbtTransferWatch();
   stopPinMonitor();
   stopMemoryMonitor();
+  stopScheduledBackups();
 }
 
 // ============================================
@@ -479,7 +516,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         isLeader: isLeaderWorker(),
         network: config.networkPassphrase,
         rpcUrl: config.rpcUrl,
-        relayer: relayerKeypair.publicKey(),
+        relayer: services.stellar.relayerKeypair.publicKey(),
       });
 
       console.log(`\nZKVote Relayer running on http://localhost:${PORT}`);
@@ -541,7 +578,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
             log("info", "worker_demoted_stopping_background_services", {
               pid: process.pid,
             });
-            stopBackgroundServices();
+            await stopBackgroundServices();
           }
         });
 
