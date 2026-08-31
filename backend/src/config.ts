@@ -114,6 +114,7 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((v) => v === "true"),
+  LOG_SAMPLE_RATE: z.coerce.number().min(0).max(1).optional(),
   RELAYER_GENERIC_ERRORS: z
     .enum(["true", "false"])
     .default("false")
@@ -162,6 +163,19 @@ const envSchema = z.object({
   COMMITMENT_RATE_LIMIT: z.coerce.number().int().positive().default(5),
   COMMITMENT_RATE_WINDOW_MS: z.coerce.number().int().positive().default(60000),
 
+  // #371: per-member commitment registration rate limit (relayer route).
+  // Mirrors the on-chain per-member cooldown in the membership-tree contract.
+  COMMITMENT_REGISTRATION_RATE_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5),
+  COMMITMENT_REGISTRATION_RATE_WINDOW_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(60000),
+
   FLAG_THRESHOLD: z.coerce.number().int().positive().default(3),
   FLAG_POW_DIFFICULTY: z.coerce.number().int().positive().default(10),
 
@@ -199,6 +213,19 @@ const envSchema = z.object({
   BACKUP_INTERVAL_MS: z.coerce.number().int().positive().default(86400000),
   BACKUP_S3_BUCKET: z.string().optional(),
   S3_BUCKET: z.string().optional(),
+  // Encrypted relay DB snapshots (#359)
+  BACKUP_ENCRYPTION_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  BACKUP_ENCRYPTION_AUTO_INIT: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  BACKUP_ENCRYPTION_KEY: z.string().optional(),
+  BACKUP_ENCRYPTION_KEY_FILE: z.string().optional(),
+  BACKUP_KEY_RING_DIR: z.string().optional(),
+  BACKUP_RETENTION_COUNT: z.coerce.number().int().positive().default(10),
   ARCHIVAL_AGE_DAYS: z.coerce.number().int().positive().default(90),
   ARCHIVAL_INTERVAL_MS: z.coerce.number().int().positive().default(86400000),
 
@@ -222,6 +249,12 @@ const envSchema = z.object({
     .positive()
     .default(60000),
   RELAYER_PUBLIC_KEY: z.string().default(""),
+  MAX_SPONSORED_FEE_STROOPS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(1_000_000)
+    .default(100000),
 
   CIRCUIT_BREAKER_RPC_FAILURE_THRESHOLD: z.coerce
     .number()
@@ -423,6 +456,7 @@ export const config = {
   logClientIp: validatedEnv.LOG_CLIENT_IP,
   logRequestBody: validatedEnv.LOG_REQUEST_BODY,
   stripRequestBodies: validatedEnv.STRIP_REQUEST_BODIES,
+  logSampleRate: validatedEnv.LOG_SAMPLE_RATE,
   genericErrors: validatedEnv.RELAYER_GENERIC_ERRORS,
   healthExposeDetails: validatedEnv.HEALTH_EXPOSE_DETAILS,
   healthcheckPing: validatedEnv.HEALTHCHECK_PING,
@@ -459,6 +493,12 @@ export const config = {
   commitmentRateLimit: validatedEnv.COMMITMENT_RATE_LIMIT,
   commitmentRateWindowMs: validatedEnv.COMMITMENT_RATE_WINDOW_MS,
 
+  // Anti-spam: per-member commitment registration rate limiting (#371)
+  commitmentRegistrationRateLimit:
+    validatedEnv.COMMITMENT_REGISTRATION_RATE_LIMIT,
+  commitmentRegistrationRateWindowMs:
+    validatedEnv.COMMITMENT_REGISTRATION_RATE_WINDOW_MS,
+
   // Anti-spam: community flagging
   flagThreshold: validatedEnv.FLAG_THRESHOLD,
   flagPowDifficulty: validatedEnv.FLAG_POW_DIFFICULTY,
@@ -480,6 +520,13 @@ export const config = {
   // Backup & Archival
   backupIntervalMs: validatedEnv.BACKUP_INTERVAL_MS,
   s3Bucket: validatedEnv.BACKUP_S3_BUCKET || validatedEnv.S3_BUCKET,
+  // Encrypted relay DB snapshots (#359)
+  backupEncryptionEnabled: validatedEnv.BACKUP_ENCRYPTION_ENABLED,
+  backupEncryptionAutoInit: validatedEnv.BACKUP_ENCRYPTION_AUTO_INIT,
+  backupEncryptionKey: validatedEnv.BACKUP_ENCRYPTION_KEY,
+  backupEncryptionKeyFile: validatedEnv.BACKUP_ENCRYPTION_KEY_FILE,
+  backupKeyRingDir: validatedEnv.BACKUP_KEY_RING_DIR,
+  backupRetentionCount: validatedEnv.BACKUP_RETENTION_COUNT,
   archivalAgeDays: validatedEnv.ARCHIVAL_AGE_DAYS,
   archivalIntervalMs: validatedEnv.ARCHIVAL_INTERVAL_MS,
 
@@ -494,6 +541,7 @@ export const config = {
   walletRateLimitMax: validatedEnv.WALLET_RATE_LIMIT_MAX,
   walletRateLimitWindowMs: validatedEnv.WALLET_RATE_LIMIT_WINDOW_MS,
   relayerPublicKey: validatedEnv.RELAYER_PUBLIC_KEY,
+  maxSponsoredFeeStroops: validatedEnv.MAX_SPONSORED_FEE_STROOPS,
   // Circuit Breakers
   circuitBreakerRpcFailureThreshold:
     validatedEnv.CIRCUIT_BREAKER_RPC_FAILURE_THRESHOLD,
