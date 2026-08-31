@@ -2,7 +2,9 @@
  * Request Logging Middleware
  *
  * Provides request context and structured logging for all requests.
- * Supports PII redaction via the enhanced logger.
+ * Supports PII redaction via the enhanced logger and correlation ID
+ * propagation via AsyncLocalStorage so every downstream log call from
+ * services/routes automatically carries the request's correlation + trace ID.
  */
 
 import type { Request, Response, NextFunction } from "express";
@@ -40,8 +42,9 @@ export function parseIncomingTraceId(
 }
 
 /**
- * Request logging middleware
- * Adds context ID and logs request start/end
+ * Builds the correlation context for a request and runs the downstream
+ * middleware chain within it, so every nested log call (routes, services)
+ * automatically inherits the request's correlation + trace ID.
  */
 export function requestLogger(
   req: Request,
@@ -65,30 +68,17 @@ export function requestLogger(
   req.spanId = spanContext.spanId;
   res.setHeader("traceparent", formatTraceparent(spanContext));
 
-  // Build IP meta based on configuration
-  const policy = getRedactionPolicy();
-  let ipMeta: Record<string, string> = {};
-
-  if (policy.showClientIp === "plain") {
-    ipMeta = { ip: req.ip || "" };
-  } else if (policy.showClientIp === "hash") {
-    ipMeta = { ipHash: hashIp(req.ip) };
-  }
-  // If "none", ipMeta stays empty
-
-  // Build body meta (only log body keys, not values)
-  const bodyMeta = policy.showBodyKeysOnly
-    ? { bodyKeys: Object.keys(req.body || {}) }
-    : {};
-
-  log("info", "request_start", {
+  const context: RequestContext = {
     ctx,
     traceId: spanContext.traceId,
     path: req.path,
     method: req.method,
-    ...ipMeta,
-    ...bodyMeta,
-  });
+  };
+
+  runWithContext(context, () => {
+    // Build IP meta based on configuration
+    const policy = getRedactionPolicy();
+    let ipMeta: Record<string, string> = {};
 
   // Log request end on finish
   res.on("finish", () => {
@@ -96,9 +86,10 @@ export function requestLogger(
       ctx,
       traceId: spanContext.traceId,
       path: req.path,
-      status: res.statusCode,
+      method: req.method,
+      ...ipMeta,
+      ...bodyMeta,
     });
-  });
 
   runWithSpanContext(spanContext, next);
 }
@@ -113,13 +104,11 @@ export function errorLogger(
   res: Response,
   next: NextFunction,
 ): void {
-  const ctx = req.ctx || "unknown";
   const isProduction = process.env.NODE_ENV === "production";
 
-  // Log the error with redaction
+  // Log the error with redaction; correlation IDs are attached automatically
+  // via the active request context.
   log("error", "request_error", {
-    ctx,
-    traceId: req.traceId,
     path: req.path,
     method: req.method,
     error: err.message,
