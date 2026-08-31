@@ -63,6 +63,13 @@ const envSchema = z.object({
 
   RELAYER_AUTH_TOKEN: z.string().optional(),
   RELAYER_SECRET_KEY: z.string().optional(),
+  RELAYER_SIGNER_TYPE: z
+    .enum(["local", "aws_kms", "gcp_kms", "pkcs11"])
+    .default("local"),
+  RELAYER_PUBLIC_KEY: z.string().optional(),
+  KMS_KEY_ID: z.string().optional(),
+  KMS_REGION: z.string().optional(),
+  KMS_PROVIDER: z.string().optional(),
   AUTH_MASTER_KEY: z.string().optional(),
 
   TOKEN_ROTATION_ENABLED: z
@@ -422,6 +429,11 @@ export const config = {
   // Authentication (read from env as fallback; see getSecret() for dynamic retrieval)
   relayerAuthToken: validatedEnv.RELAYER_AUTH_TOKEN,
   relayerSecretKey: validatedEnv.RELAYER_SECRET_KEY,
+  relayerSignerType: validatedEnv.RELAYER_SIGNER_TYPE,
+  relayerPublicKey: validatedEnv.RELAYER_PUBLIC_KEY,
+  kmsKeyId: validatedEnv.KMS_KEY_ID,
+  kmsRegion: validatedEnv.KMS_REGION,
+  kmsProvider: validatedEnv.KMS_PROVIDER,
 
   // Master key for token management endpoints (REQUIRED - must be at least 32 chars)
   authMasterKey: validatedEnv.AUTH_MASTER_KEY,

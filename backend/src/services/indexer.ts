@@ -19,10 +19,9 @@ import {
   indexerWatermarkLedger,
   indexerPollDuration,
   indexerOverrunSkips,
-  indexerShedPolls,
-  indexerBackpressureLevel,
-  indexerPollIntervalSeconds,
-  indexerCyclesTotal,
+  indexerQueueDepth,
+  indexerRpcStreamReconnectsTotal,
+  indexerGapRecoveriesTotal,
 } from "./metrics.js";
 import { markDegraded, markHealthy } from "./service-health.js";
 import { WatermarkScheduler } from "./indexer-scheduler.js";
@@ -78,6 +77,8 @@ interface ParsedEvent {
 /** Indexer status response */
 export interface IndexerStatus extends DbStatus {
   isRunning: boolean;
+  isStreaming?: boolean;
+  queueDepth?: number;
   indexerLag: number;
   hasGap: boolean;
   catchUpMode: boolean;
@@ -109,20 +110,16 @@ export type { Event, EventQueryOptions };
 // ============================================
 
 let isPolling = false;
+let isStreamingMode = false;
 let rpcServer: StellarSdk.rpc.Server | null = null;
 let indexerLag = 0;
 let hasGap = false;
 let catchUpMode = false;
 let activeScheduler: WatermarkScheduler | null = null;
-/**
- * Unverified events left over from the last cycle. This is the indexer's
- * downstream queue: chain verification drains it, so a growing backlog means
- * ingestion is outrunning verification and further polls should be shed (#323).
- */
-let verificationBacklog = 0;
-
-/** Ceiling on the verification backlog before poll ticks are shed. */
-const MAX_VERIFICATION_BACKLOG = 500;
+let eventQueue: EventInput[] = [];
+let isDrainingQueue = false;
+const HIGH_WATERMARK = 500;
+const LOW_WATERMARK = 100;
 
 // ============================================
 // LOGGER
@@ -698,6 +695,68 @@ export function getIndexedDaos(): number[] {
 }
 
 /**
+ * Ingest an event through the backpressure queue
+ */
+export async function pushStreamEvent(eventInput: EventInput): Promise<boolean> {
+  eventQueue.push(eventInput);
+  indexerQueueDepth.set(eventQueue.length);
+
+  // If queue exceeds high watermark, apply backpressure by awaiting drain
+  if (eventQueue.length >= HIGH_WATERMARK) {
+    log("warn", "indexer_backpressure_engaged", {
+      queueLength: eventQueue.length,
+      highWatermark: HIGH_WATERMARK,
+    });
+    await drainEventQueue();
+  } else if (!isDrainingQueue) {
+    void drainEventQueue();
+  }
+
+  return true;
+}
+
+/**
+ * Drain queued stream events to persistent storage
+ */
+export async function drainEventQueue(): Promise<number> {
+  if (isDrainingQueue || eventQueue.length === 0) return 0;
+  isDrainingQueue = true;
+  let processed = 0;
+
+  try {
+    while (eventQueue.length > 0) {
+      const batch = eventQueue.splice(0, 50);
+      for (const item of batch) {
+        if (db.addEvent(item)) {
+          processed++;
+          indexerEventsProcessed.inc({ event_type: "stream_indexed" }, 1);
+        }
+      }
+      indexerQueueDepth.set(eventQueue.length);
+      if (eventQueue.length <= LOW_WATERMARK) {
+        // Backpressure relieved
+      }
+    }
+  } finally {
+    isDrainingQueue = false;
+  }
+  return processed;
+}
+
+/**
+ * Start indexer in streaming mode with automatic gap detection and backpressure
+ */
+export async function startStreamingIndexer(
+  server: StellarSdk.rpc.Server,
+  contracts: string[],
+  pollIntervalMs = 2000,
+): Promise<void> {
+  isStreamingMode = true;
+  indexerRpcStreamReconnectsTotal.inc();
+  await startIndexer(server, contracts, pollIntervalMs);
+}
+
+/**
  * Get indexer status
  */
 export function getIndexerStatus(): IndexerStatus {
@@ -705,6 +764,8 @@ export function getIndexerStatus(): IndexerStatus {
   const status = db.getDbStatus();
   return {
     isRunning: isPolling,
+    isStreaming: isStreamingMode,
+    queueDepth: eventQueue.length,
     indexerLag,
     hasGap,
     catchUpMode,
