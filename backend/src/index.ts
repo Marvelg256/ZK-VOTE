@@ -93,8 +93,10 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
-  analyticsRoutes,
-  encryptionRoutes,
+  novaRoutes,
+  metricsRoutes,
+  remediationRoutes,
+  registerShutdownHandler,
 } from "./routes/index.js";
 import metricsRoutes from "./routes/metrics.js";
 import remediationRoutes from "./routes/remediation.js";
@@ -263,34 +265,7 @@ app.use(claimRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
-// OpenAPI spec endpoints (public, no audit log pollution for the spec itself)
-app.get("/api-docs/openapi.json", (_req, res) => {
-  res.json(buildOpenApiDocument());
-});
-
-// Interactive Swagger UI at /api-docs (relaxes the global CSP for itself)
-app.use(
-  "/api-docs",
-  (req: Request, res: Response, next: NextFunction) => {
-    res.setHeader(
-      "Content-Security-Policy",
-      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';",
-    );
-    next();
-  },
-  swaggerUi.serve,
-  swaggerUi.setup(buildOpenApiDocument() as object, {
-    swaggerOptions: { url: "/api-docs/openapi.json" },
-  }),
-);
-
-// OpenAPI spec endpoint (public, no audit-log pollution for the spec itself)
-app.get("/openapi.json", (_req, res) => {
-  res.json(openApiSpec);
-});
-// Interactive API docs (the CSP comment above intentionally relaxes policy
-// for this route so swagger-ui can render).
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
+app.use("/api/v1/nova", novaRoutes);
 
 // Global error handler (must be last)
 app.use(errorHandler);
@@ -359,26 +334,10 @@ async function gracefulShutdown(reason: string): Promise<void> {
 
   await httpClosed;
 
-  // Drain any in-flight sequence-locked chain submissions (they can outlive
-  // the HTTP response — a proof accepted but never submitted is a real loss).
-  const drained = await services.stellar.waitForSequenceLockIdle(
-    DRAIN_TIMEOUT_MS,
+  const drained = await waitForSequenceLockIdle(DRAIN_TIMEOUT_MS).then(
+    () => true,
+    () => false,
   );
-  log(drained ? "info" : "warn", "shutdown_sequence_lock_drained", {
-    drained,
-    remaining: services.stellar.getPendingSequenceLockOps(),
-  });
-
-  // Close the SQLite connection cleanly (checkpoints WAL, avoids corruption
-  // on restart).
-  try {
-    closeDb();
-    log("info", "shutdown_component_stopped", { component: "database" });
-  } catch (err) {
-    log("error", "shutdown_db_close_error", {
-      error: (err as Error).message,
-    });
-  }
 
   clearTimeout(forceExitTimer);
   log("info", "shutdown_complete", {

@@ -15,6 +15,7 @@ members = [
     "contracts/threshold-crypto",
     "contracts/rewards",
     "tests/integration",
+    "crates/nova-aggregator",
 ]
 default-members = [
     "contracts/zkvote-groth16",

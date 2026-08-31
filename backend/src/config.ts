@@ -687,17 +687,11 @@ export function validateEnv(): void {
   if (!config.authMasterKey) missing.push("AUTH_MASTER_KEY");
 
   const criticalKeys = ["VOTING_CONTRACT_ID", "TREE_CONTRACT_ID", "RELAYER_SECRET_KEY", "RELAYER_AUTH_TOKEN"];
-
-  // Derive the set of required env vars that were not provided.
-  const requiredKeys: Array<[string, unknown]> = [
-    ["VOTING_CONTRACT_ID", config.votingContractId],
-    ["TREE_CONTRACT_ID", config.treeContractId],
-    ["COMMENTS_CONTRACT_ID", config.commentsContractId],
-    ["RELAYER_SECRET_KEY", config.relayerSecretKey],
-    ["RELAYER_AUTH_TOKEN", config.relayerAuthToken],
-    ["AUTH_MASTER_KEY", config.authMasterKey],
-  ];
-  const missing = requiredKeys.filter(([, value]) => !value).map(([key]) => key);
+  const missing: string[] = [];
+  if (!config.votingContractId) missing.push("VOTING_CONTRACT_ID");
+  if (!config.treeContractId) missing.push("TREE_CONTRACT_ID");
+  if (!config.relayerSecretKey) missing.push("RELAYER_SECRET_KEY");
+  if (!config.relayerAuthToken) missing.push("RELAYER_AUTH_TOKEN");
   const criticalMissing = missing.filter((k) => criticalKeys.includes(k));
   const nonCriticalMissing = missing.filter((k) => !criticalKeys.includes(k));
 
