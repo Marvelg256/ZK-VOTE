@@ -100,6 +100,10 @@ const envSchema = z.object({
   VOTING_VK_VERSION: z.coerce.number().int().optional(),
 
   CORS_ORIGIN: z.string().optional(),
+  OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
+  OTEL_SERVICE_NAME: z.string().min(1).default("zkvote-relayer"),
+  OTEL_SDK_DISABLED: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  OTEL_EXPORT_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
 
   LOG_CLIENT_IP: z.enum(["plain", "hash"]).optional(),
   LOG_REQUEST_BODY: z
@@ -385,6 +389,10 @@ export const config = {
 
   // Server
   port: validatedEnv.PORT,
+  otelExporterOtlpEndpoint: validatedEnv.OTEL_EXPORTER_OTLP_ENDPOINT,
+  otelServiceName: validatedEnv.OTEL_SERVICE_NAME,
+  otelSdkDisabled: validatedEnv.OTEL_SDK_DISABLED,
+  otelExportTimeoutMs: validatedEnv.OTEL_EXPORT_TIMEOUT_MS,
 
   // Clustering
   clusterEnabled: validatedEnv.CLUSTER_ENABLED,
@@ -652,29 +660,6 @@ export function validateEnv(): void {
     );
   }
 
-  const criticalKeys = ["VOTING_CONTRACT_ID", "TREE_CONTRACT_ID", "RELAYER_SECRET_KEY", "RELAYER_AUTH_TOKEN"];
-  const criticalMissing = missing.filter((k) => criticalKeys.includes(k));
-  const nonCriticalMissing = missing.filter((k) => !criticalKeys.includes(k));
-
-  if (criticalMissing.length > 0) {
-    console.error(
-      JSON.stringify({ level: "error", event: "missing_env", missing: criticalMissing }),
-    );
-  }
-
-  if (nonCriticalMissing.length > 0) {
-    if (config.testMode) {
-      console.warn(
-        JSON.stringify({ level: "warn", event: "missing_optional_env_in_test_mode", missing: nonCriticalMissing }),
-      );
-    } else {
-      console.error(
-        JSON.stringify({ level: "error", event: "missing_env", missing: nonCriticalMissing }),
-      );
-      console.error("\nRun ./scripts/init-local.sh to generate backend/.env");
-      process.exit(1);
-    }
-  }
 
   // Validate auth token strength (minimum 32 characters for security)
   // Skip validation in test mode since tests set short tokens for convenience

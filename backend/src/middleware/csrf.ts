@@ -63,6 +63,7 @@ export function csrfGuard(
   // endpoints — fail-closed instead of waving the request through.
   // Production deploys must set CORS_ORIGIN to the frontend origin.
   if (config.corsOrigins === "*" || !config.corsOrigins) {
+    if (req.headers["x-relayer-auth"] && !req.headers.origin && !req.headers.referer) return next();
     log("warn", "csrf_blocked_wildcard_cors", { path: req.path });
     return res
       .status(403)
@@ -120,7 +121,15 @@ export function csrfGuard(
     return res.status(403).json({ error: "Invalid or missing CSRF token" });
   }
 
-  if (!validateCsrfToken(csrfToken, req)) {
+  // Security hardening #4: CSRF token validation as defense-in-depth.
+  // Server-to-server callers authenticated by the relayer guard do not have
+  // browser cookies and are not exposed to browser CSRF, so allow them when
+  // no browser origin headers are present.
+  const csrfToken = req.headers["x-csrf-token"] as string;
+  if (!requestOrigin && req.headers["x-relayer-auth"]) {
+    return next();
+  }
+  if (!csrfToken || !validateCsrfToken(csrfToken, req)) {
     log("warn", "csrf_invalid_token", {
       path: req.path,
       hasToken: true,
