@@ -63,6 +63,13 @@ const envSchema = z.object({
 
   RELAYER_AUTH_TOKEN: z.string().optional(),
   RELAYER_SECRET_KEY: z.string().optional(),
+  RELAYER_SIGNER_TYPE: z
+    .enum(["local", "aws_kms", "gcp_kms", "pkcs11"])
+    .default("local"),
+  RELAYER_PUBLIC_KEY: z.string().optional(),
+  KMS_KEY_ID: z.string().optional(),
+  KMS_REGION: z.string().optional(),
+  KMS_PROVIDER: z.string().optional(),
   AUTH_MASTER_KEY: z.string().optional(),
 
   TOKEN_ROTATION_ENABLED: z
@@ -100,6 +107,10 @@ const envSchema = z.object({
   VOTING_VK_VERSION: z.coerce.number().int().optional(),
 
   CORS_ORIGIN: z.string().optional(),
+  OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
+  OTEL_SERVICE_NAME: z.string().min(1).default("zkvote-relayer"),
+  OTEL_SDK_DISABLED: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  OTEL_EXPORT_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
 
   LOG_CLIENT_IP: z.enum(["plain", "hash"]).optional(),
   LOG_REQUEST_BODY: z
@@ -110,6 +121,7 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((v) => v === "true"),
+  LOG_SAMPLE_RATE: z.coerce.number().min(0).max(1).optional(),
   RELAYER_GENERIC_ERRORS: z
     .enum(["true", "false"])
     .default("false")
@@ -158,6 +170,19 @@ const envSchema = z.object({
   COMMITMENT_RATE_LIMIT: z.coerce.number().int().positive().default(5),
   COMMITMENT_RATE_WINDOW_MS: z.coerce.number().int().positive().default(60000),
 
+  // #371: per-member commitment registration rate limit (relayer route).
+  // Mirrors the on-chain per-member cooldown in the membership-tree contract.
+  COMMITMENT_REGISTRATION_RATE_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5),
+  COMMITMENT_REGISTRATION_RATE_WINDOW_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(60000),
+
   FLAG_THRESHOLD: z.coerce.number().int().positive().default(3),
   FLAG_POW_DIFFICULTY: z.coerce.number().int().positive().default(10),
 
@@ -195,6 +220,19 @@ const envSchema = z.object({
   BACKUP_INTERVAL_MS: z.coerce.number().int().positive().default(86400000),
   BACKUP_S3_BUCKET: z.string().optional(),
   S3_BUCKET: z.string().optional(),
+  // Encrypted relay DB snapshots (#359)
+  BACKUP_ENCRYPTION_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  BACKUP_ENCRYPTION_AUTO_INIT: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  BACKUP_ENCRYPTION_KEY: z.string().optional(),
+  BACKUP_ENCRYPTION_KEY_FILE: z.string().optional(),
+  BACKUP_KEY_RING_DIR: z.string().optional(),
+  BACKUP_RETENTION_COUNT: z.coerce.number().int().positive().default(10),
   ARCHIVAL_AGE_DAYS: z.coerce.number().int().positive().default(90),
   ARCHIVAL_INTERVAL_MS: z.coerce.number().int().positive().default(86400000),
 
@@ -218,6 +256,12 @@ const envSchema = z.object({
     .positive()
     .default(60000),
   RELAYER_PUBLIC_KEY: z.string().default(""),
+  MAX_SPONSORED_FEE_STROOPS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(1_000_000)
+    .default(100000),
 
   CIRCUIT_BREAKER_RPC_FAILURE_THRESHOLD: z.coerce
     .number()
@@ -352,6 +396,10 @@ export const config = {
 
   // Server
   port: validatedEnv.PORT,
+  otelExporterOtlpEndpoint: validatedEnv.OTEL_EXPORTER_OTLP_ENDPOINT,
+  otelServiceName: validatedEnv.OTEL_SERVICE_NAME,
+  otelSdkDisabled: validatedEnv.OTEL_SDK_DISABLED,
+  otelExportTimeoutMs: validatedEnv.OTEL_EXPORT_TIMEOUT_MS,
 
   // Clustering
   clusterEnabled: validatedEnv.CLUSTER_ENABLED,
@@ -381,6 +429,11 @@ export const config = {
   // Authentication (read from env as fallback; see getSecret() for dynamic retrieval)
   relayerAuthToken: validatedEnv.RELAYER_AUTH_TOKEN,
   relayerSecretKey: validatedEnv.RELAYER_SECRET_KEY,
+  relayerSignerType: validatedEnv.RELAYER_SIGNER_TYPE,
+  relayerPublicKey: validatedEnv.RELAYER_PUBLIC_KEY,
+  kmsKeyId: validatedEnv.KMS_KEY_ID,
+  kmsRegion: validatedEnv.KMS_REGION,
+  kmsProvider: validatedEnv.KMS_PROVIDER,
 
   // Master key for token management endpoints (REQUIRED - must be at least 32 chars)
   authMasterKey: validatedEnv.AUTH_MASTER_KEY,
@@ -400,6 +453,7 @@ export const config = {
   commentsContractId: process.env.COMMENTS_CONTRACT_ID,
   daoRegistryContractId: process.env.DAO_REGISTRY_CONTRACT_ID,
   membershipSbtContractId: process.env.MEMBERSHIP_SBT_CONTRACT_ID,
+  rewardsContractId: validatedEnv.REWARDS_CONTRACT_ID,
   bridgeContractId: process.env.BRIDGE_CONTRACT_ID,
   circuitRegistryContractId: process.env.CIRCUIT_REGISTRY_CONTRACT_ID,
 
@@ -415,6 +469,7 @@ export const config = {
   logClientIp: validatedEnv.LOG_CLIENT_IP,
   logRequestBody: validatedEnv.LOG_REQUEST_BODY,
   stripRequestBodies: validatedEnv.STRIP_REQUEST_BODIES,
+  logSampleRate: validatedEnv.LOG_SAMPLE_RATE,
   genericErrors: validatedEnv.RELAYER_GENERIC_ERRORS,
   healthExposeDetails: validatedEnv.HEALTH_EXPOSE_DETAILS,
   healthcheckPing: validatedEnv.HEALTHCHECK_PING,
@@ -451,6 +506,12 @@ export const config = {
   commitmentRateLimit: validatedEnv.COMMITMENT_RATE_LIMIT,
   commitmentRateWindowMs: validatedEnv.COMMITMENT_RATE_WINDOW_MS,
 
+  // Anti-spam: per-member commitment registration rate limiting (#371)
+  commitmentRegistrationRateLimit:
+    validatedEnv.COMMITMENT_REGISTRATION_RATE_LIMIT,
+  commitmentRegistrationRateWindowMs:
+    validatedEnv.COMMITMENT_REGISTRATION_RATE_WINDOW_MS,
+
   // Anti-spam: community flagging
   flagThreshold: validatedEnv.FLAG_THRESHOLD,
   flagPowDifficulty: validatedEnv.FLAG_POW_DIFFICULTY,
@@ -472,6 +533,13 @@ export const config = {
   // Backup & Archival
   backupIntervalMs: validatedEnv.BACKUP_INTERVAL_MS,
   s3Bucket: validatedEnv.BACKUP_S3_BUCKET || validatedEnv.S3_BUCKET,
+  // Encrypted relay DB snapshots (#359)
+  backupEncryptionEnabled: validatedEnv.BACKUP_ENCRYPTION_ENABLED,
+  backupEncryptionAutoInit: validatedEnv.BACKUP_ENCRYPTION_AUTO_INIT,
+  backupEncryptionKey: validatedEnv.BACKUP_ENCRYPTION_KEY,
+  backupEncryptionKeyFile: validatedEnv.BACKUP_ENCRYPTION_KEY_FILE,
+  backupKeyRingDir: validatedEnv.BACKUP_KEY_RING_DIR,
+  backupRetentionCount: validatedEnv.BACKUP_RETENTION_COUNT,
   archivalAgeDays: validatedEnv.ARCHIVAL_AGE_DAYS,
   archivalIntervalMs: validatedEnv.ARCHIVAL_INTERVAL_MS,
 
@@ -486,6 +554,7 @@ export const config = {
   walletRateLimitMax: validatedEnv.WALLET_RATE_LIMIT_MAX,
   walletRateLimitWindowMs: validatedEnv.WALLET_RATE_LIMIT_WINDOW_MS,
   relayerPublicKey: validatedEnv.RELAYER_PUBLIC_KEY,
+  maxSponsoredFeeStroops: validatedEnv.MAX_SPONSORED_FEE_STROOPS,
   // Circuit Breakers
   circuitBreakerRpcFailureThreshold:
     validatedEnv.CIRCUIT_BREAKER_RPC_FAILURE_THRESHOLD,
@@ -590,7 +659,10 @@ export function validateEnv(): void {
   if (!config.commentsContractId)
     errors.push("COMMENTS_CONTRACT_ID is required");
   if (!config.relayerSecretKey) errors.push("RELAYER_SECRET_KEY is required");
-  if (!config.authMasterKey) errors.push("AUTH_MASTER_KEY is required");
+  // AUTH_MASTER_KEY is a production-only control-plane credential; tests and
+  // local dev don't need it (kept out of the critical path in test mode).
+  if (!config.authMasterKey && !config.testMode)
+    errors.push("AUTH_MASTER_KEY is required");
 
   if (config.votingContractId && !isValidContractId(config.votingContractId)) {
     errors.push(
@@ -604,7 +676,22 @@ export function validateEnv(): void {
     );
   }
 
+  const missing: string[] = [];
+  if (!config.votingContractId) missing.push("VOTING_CONTRACT_ID");
+  if (!config.treeContractId) missing.push("TREE_CONTRACT_ID");
+  if (!config.commentsContractId) missing.push("COMMENTS_CONTRACT_ID");
+  if (!config.relayerSecretKey) missing.push("RELAYER_SECRET_KEY");
+  if (!config.rpcUrl) missing.push("SOROBAN_RPC_URL");
+  if (!config.networkPassphrase) missing.push("NETWORK_PASSPHRASE");
+  if (!config.relayerAuthToken) missing.push("RELAYER_AUTH_TOKEN");
+  if (!config.authMasterKey) missing.push("AUTH_MASTER_KEY");
+
   const criticalKeys = ["VOTING_CONTRACT_ID", "TREE_CONTRACT_ID", "RELAYER_SECRET_KEY", "RELAYER_AUTH_TOKEN"];
+  const missing: string[] = [];
+  if (!config.votingContractId) missing.push("VOTING_CONTRACT_ID");
+  if (!config.treeContractId) missing.push("TREE_CONTRACT_ID");
+  if (!config.relayerSecretKey) missing.push("RELAYER_SECRET_KEY");
+  if (!config.relayerAuthToken) missing.push("RELAYER_AUTH_TOKEN");
   const criticalMissing = missing.filter((k) => criticalKeys.includes(k));
   const nonCriticalMissing = missing.filter((k) => !criticalKeys.includes(k));
 
@@ -677,7 +764,25 @@ export function validateEnv(): void {
     );
   }
 
-  if (config.commentsContractId && !isValidContractId(config.commentsContractId)) {
+  if (
+    config.commentsContractId &&
+    !isValidContractId(config.commentsContractId)
+  ) {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: "invalid_contract_id",
+        var: "COMMENTS_CONTRACT_ID",
+        value: config.commentsContractId,
+      }),
+    );
+    process.exit(1);
+  }
+
+  if (
+    config.rewardsContractId &&
+    !isValidContractId(config.rewardsContractId)
+  ) {
     console.error(
       JSON.stringify({
         level: "error",
