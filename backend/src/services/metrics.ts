@@ -54,6 +54,13 @@ export const httpRequestSize = new Histogram({
   registers: [register],
 });
 
+export const httpRequestsInFlight = new Gauge({
+  name: "zkvote_http_requests_in_flight",
+  help: "HTTP requests currently being served (concurrency / backpressure signal)",
+  labelNames: ["method", "route"] as const,
+  registers: [register],
+});
+
 export const httpResponseSize = new Histogram({
   name: "zkvote_http_response_size_bytes",
   help: "HTTP response body size in bytes",
@@ -85,6 +92,24 @@ export const coalescingWaitTime = new Histogram({
   help: "Time spent waiting for coalesced requests in seconds",
   labelNames: ["key"] as const,
   buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30],
+  registers: [register],
+});
+
+// ============================================
+// MEMBERSHIP REGISTRATION METRICS (#371)
+// ============================================
+
+export const membershipRegistrationTotal = new Counter({
+  name: "zkvote_membership_registration_requests_total",
+  help: "Total commitment registration requests served by the membership route",
+  labelNames: ["dao_id"] as const,
+  registers: [register],
+});
+
+export const membershipRegistrationLimited = new Counter({
+  name: "zkvote_membership_registration_limited_total",
+  help: "Commitment registration requests blocked by rate limiting or the on-chain registration cooldown",
+  labelNames: ["reason"] as const,
   registers: [register],
 });
 
