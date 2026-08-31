@@ -7,7 +7,6 @@ use soroban_sdk::{
 const ADMIN_KEY: Symbol = symbol_short!("admin");
 const CONFIG_KEY: Symbol = symbol_short!("cfg");
 const FINALIZED_KEY: Symbol = symbol_short!("fini");
-const SHARE_COUNT_KEY: Symbol = symbol_short!("shcnt");
 const VERSION: u32 = 1;
 const VERSION_KEY: Symbol = symbol_short!("ver");
 
@@ -381,7 +380,7 @@ impl ThresholdCrypto {
 
         let agg_key = DataKey::AnalyticsAggregate(dao_id, round_id);
         // Identity element for g1_add is the point at infinity: 64 zero bytes.
-        let identity = |env: &Env| Bn254G1Affine::from_array(&env, &[0u8; 64]);
+        let identity = |env: &Env| Bn254G1Affine::from_array(env, &[0u8; 64]);
         let mut agg: AnalyticsAggregate =
             env.storage()
                 .persistent()

@@ -178,7 +178,7 @@ fn test_happy_path_dkg() {
 
     client.initialize(&admin, &2, &3);
     assert_eq!(client.get_config().threshold, 2);
-    assert_eq!(client.is_finalized(), false);
+    assert!(!client.is_finalized());
 
     client.add_participant(&p1);
     client.add_participant(&p2);
@@ -200,9 +200,9 @@ fn test_happy_path_dkg() {
     // Final key should be agg = 100 + 200 = 300 (U256 addition)
     let expected = U256::from_u32(&env, 300);
     assert_eq!(final_key, expected);
-    assert_eq!(client.is_finalized(), true);
+    assert!(client.is_finalized());
     assert_eq!(client.get_final_key(), expected);
-    assert_eq!(client.get_config().finalized, true);
+    assert!(client.get_config().finalized);
 }
 
 #[test]
