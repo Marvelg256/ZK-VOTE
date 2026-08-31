@@ -17,6 +17,7 @@ import {
   relayerKeypair,
   callWithTimeout,
   simulateWithBackoff,
+  sequenceManager,
   waitForTransaction,
   withSequenceLock,
   waitForSequenceLockIdle,
@@ -26,6 +27,24 @@ import {
 } from "./services/stellar.js";
 import type { StellarContext } from "./services/interfaces.js";
 import { initCircuitRegistry } from "./services/circuit-registry.js";
+import { initAntiSpam } from "./services/anti-spam.js";
+import { initTtlService } from "./services/ttl.js";
+import { initSbtGuard } from "./services/sbt-guard.js";
+import { initExclusionProof } from "./services/exclusion-proof.js";
+import { initTtlChecker } from "./services/ttl-checker.js";
+import { initSyncService } from "./services/sync.js";
+import { initBridgeRelay } from "./services/bridge.js";
+import * as indexer from "./services/indexer.js";
+import { kysely } from "./services/kysely.js";
+import * as dbService from "./services/db.js";
+import {
+  queryInstanceTTLWithFallback,
+  queryPersistentTTLWithFallback,
+  needsRenewal,
+  isInGracePeriod,
+  formatRemaining,
+} from "./services/ttl-checker.js";
+import { markDegraded, markHealthy } from "./services/service-health.js";
 
 /** The explicitly-wired service container. */
 export interface AppServices {
@@ -67,8 +86,129 @@ export function buildAppServices(): AppServices {
     logger,
   });
 
+  // Wire the anti-spam service with explicit dependencies (#358): the write
+  // DB handle, the Kysely query builder and the structured logger.
+  initAntiSpam({ getDb: dbService.getWriteDb, kysely, logger });
+
+  // Wire the TTL renewal service with explicit dependencies (#358): the RPC
+  // surface, config flags, contract IDs, persistence, TTL introspection,
+  // health reporting and the logger.
+  initTtlService({
+    server,
+    relayerKeypair,
+    callWithTimeout,
+    withSequenceLock,
+    waitForTransaction,
+    testMode: config.testMode,
+    networkPassphrase: config.networkPassphrase,
+    ttlMaxFee: config.ttlMaxFee,
+    ttlCheckEnabled: config.ttlCheckEnabled,
+    ttlCostTrackingEnabled: config.ttlCostTrackingEnabled,
+    ttlBatchSize: config.ttlBatchSize,
+    ttlRenewalIntervalMs: config.ttlRenewalIntervalMs,
+    contractIds: {
+      votingContractId: config.votingContractId,
+      treeContractId: config.treeContractId,
+      commentsContractId: config.commentsContractId,
+      daoRegistryContractId: config.daoRegistryContractId,
+      membershipSbtContractId: config.membershipSbtContractId,
+    },
+    db: {
+      getAllCachedDaos: dbService.getAllCachedDaos,
+      upsertTTLTracking: dbService.upsertTTLTracking,
+      createTTLCostLog: dbService.createTTLCostLog,
+      updateTTLCostLog: dbService.updateTTLCostLog,
+    },
+    checker: {
+      queryInstanceTTLWithFallback,
+      queryPersistentTTLWithFallback,
+      needsRenewal,
+      isInGracePeriod,
+      formatRemaining,
+    },
+    health: { markHealthy, markDegraded },
+    log: logger.log.bind(logger),
+  });
+
+  // Wire the TTL checker with explicit dependencies (#358).
+  initTtlChecker({
+    server,
+    ttlGracePeriodMs: config.ttlGracePeriodMs,
+    ttlRenewalThresholdMs: config.ttlRenewalThresholdMs,
+    testMode: config.testMode,
+    getTTLTracking: dbService.getTTLTracking,
+    upsertTTLTracking: dbService.upsertTTLTracking,
+    log: logger.log.bind(logger),
+  });
+
+  // Wire the cache-sync service with explicit dependencies (#358). Prometheus
+  // metrics stay module-scoped by design (process-global counters, outside
+  // the #358 singleton-import scope).
+  initSyncService({
+    server,
+    relayerKeypair,
+    callWithTimeout,
+    simulateWithBackoff,
+    sequenceManager,
+    maxCachedDaos: config.maxCachedDaos,
+    daoRegistryContractId: config.daoRegistryContractId,
+    membershipSbtContractId: config.membershipSbtContractId,
+    networkPassphrase: config.networkPassphrase,
+    daoSyncIntervalMs: config.daoSyncIntervalMs,
+    membershipSyncIntervalMs: config.membershipSyncIntervalMs,
+    dbService: {
+      getAllCachedDaos: dbService.getAllCachedDaos,
+      upsertDaos: dbService.upsertDaos,
+      setDaosSyncTime: dbService.setDaosSyncTime,
+    },
+    ensureDaoCreateEvent: indexer.ensureDaoCreateEvent,
+    markHealthy,
+    markDegraded,
+    log: logger.log.bind(logger),
+  });
+
+  // Wire the bridge relay service with explicit dependencies (#358).
+  initBridgeRelay({
+    server,
+    relayerKeypair,
+    testMode: config.testMode,
+    bridgeContractId: config.bridgeContractId,
+    networkPassphrase: config.networkPassphrase,
+    callWithTimeout,
+    simulateWithBackoff,
+    waitForTransaction,
+    withSequenceLock,
+    u256ToScVal,
+    log: logger.log.bind(logger),
+  });
+
+  // Wire the SBT transfer-watch service with explicit dependencies (#358):
+  // the RPC surface, config flags, event persistence, health and the logger.
+  initSbtGuard({
+    server,
+    testMode: config.testMode,
+    membershipSbtContractId: config.membershipSbtContractId,
+    sbtTransferWatchIntervalMs: config.sbtTransferWatchIntervalMs,
+    adminAlertWebhookUrl: config.adminAlertWebhookUrl,
+    addEvent: dbService.addEvent,
+    health: { markHealthy, markDegraded },
+    log: logger.log.bind(logger),
+  });
+
+  // Wire the exclusion-proof service with explicit dependencies (#358).
+  initExclusionProof({ getDb: dbService.getDb, log: logger.log.bind(logger) });
+
   log("info", "composition_root_wired", {
-    services: ["circuit-registry"],
+    services: [
+      "circuit-registry",
+      "anti-spam",
+      "ttl",
+      "ttl-checker",
+      "sbt-guard",
+      "exclusion-proof",
+      "sync",
+      "bridge",
+    ],
   });
 
   return { config, logger, stellar };

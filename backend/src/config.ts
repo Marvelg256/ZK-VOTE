@@ -400,6 +400,7 @@ export const config = {
   commentsContractId: process.env.COMMENTS_CONTRACT_ID,
   daoRegistryContractId: process.env.DAO_REGISTRY_CONTRACT_ID,
   membershipSbtContractId: process.env.MEMBERSHIP_SBT_CONTRACT_ID,
+  rewardsContractId: validatedEnv.REWARDS_CONTRACT_ID,
   bridgeContractId: process.env.BRIDGE_CONTRACT_ID,
   circuitRegistryContractId: process.env.CIRCUIT_REGISTRY_CONTRACT_ID,
 
@@ -690,7 +691,25 @@ export function validateEnv(): void {
     );
   }
 
-  if (config.commentsContractId && !isValidContractId(config.commentsContractId)) {
+  if (
+    config.commentsContractId &&
+    !isValidContractId(config.commentsContractId)
+  ) {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: "invalid_contract_id",
+        var: "COMMENTS_CONTRACT_ID",
+        value: config.commentsContractId,
+      }),
+    );
+    process.exit(1);
+  }
+
+  if (
+    config.rewardsContractId &&
+    !isValidContractId(config.rewardsContractId)
+  ) {
     console.error(
       JSON.stringify({
         level: "error",
