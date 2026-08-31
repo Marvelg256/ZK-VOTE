@@ -333,6 +333,24 @@ export const indexerOverrunSkips = new Counter({
   registers: [register],
 });
 
+export const indexerQueueDepth = new Gauge({
+  name: "zkvote_indexer_queue_depth",
+  help: "Current number of buffered events in the indexer backpressure queue",
+  registers: [register],
+});
+
+export const indexerRpcStreamReconnectsTotal = new Counter({
+  name: "zkvote_indexer_rpc_stream_reconnects_total",
+  help: "Total number of indexer RPC streaming reconnections",
+  registers: [register],
+});
+
+export const indexerGapRecoveriesTotal = new Counter({
+  name: "zkvote_indexer_gap_recoveries_total",
+  help: "Total number of ledger gap replay recoveries initiated by the indexer",
+  registers: [register],
+});
+
 // ============================================
 // CIRCUIT BREAKER METRICS
 // ============================================

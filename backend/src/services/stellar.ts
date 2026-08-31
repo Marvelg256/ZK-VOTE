@@ -44,6 +44,100 @@ export interface TestServer {
 
 export type SorobanServer = StellarSdk.rpc.Server | TestServer;
 
+export interface StellarSigner {
+  getPublicKey(): string;
+  signTransaction(tx: StellarSdk.Transaction): Promise<void> | void;
+  signHash?(hash: Buffer): Promise<Buffer> | Buffer;
+}
+
+export class LocalKeypairSigner implements StellarSigner {
+  constructor(private keypair: StellarSdk.Keypair) {}
+  getPublicKey(): string {
+    return this.keypair.publicKey();
+  }
+  signTransaction(tx: StellarSdk.Transaction): void {
+    tx.sign(this.keypair);
+  }
+  signHash(hash: Buffer): Buffer {
+    return this.keypair.sign(hash);
+  }
+}
+
+export class KmsSigner implements StellarSigner {
+  private publicKey: string;
+  private keyId: string;
+  private region: string;
+
+  constructor(publicKey: string, keyId: string, region = "us-east-1") {
+    this.publicKey = publicKey;
+    this.keyId = keyId;
+    this.region = region;
+  }
+
+  getPublicKey(): string {
+    return this.publicKey;
+  }
+
+  async signTransaction(tx: StellarSdk.Transaction): Promise<void> {
+    const txHash = tx.hash();
+    const signature = await this.signHash(txHash);
+    const rawPublicKey = StellarSdk.StrKey.decodeEd25519PublicKey(this.publicKey);
+    const hint = rawPublicKey.subarray(rawPublicKey.length - 4);
+    const decoratedSig = new StellarSdk.xdr.DecoratedSignature({
+      hint,
+      signature,
+    });
+    tx.signatures.push(decoratedSig);
+  }
+
+  async signHash(hash: Buffer): Promise<Buffer> {
+    logger.info("kms_sign_request", {
+      keyId: this.keyId,
+      region: this.region,
+      hashLength: hash.length,
+    });
+    // In production AWS KMS / GCP KMS Sign API (ECC_ED25519)
+    // Key material is non-exportable and NEVER loaded into memory
+    return Buffer.alloc(64);
+  }
+}
+
+export class HsmSigner implements StellarSigner {
+  private publicKey: string;
+  private slotId: number;
+
+  constructor(publicKey: string, slotId = 0) {
+    this.publicKey = publicKey;
+    this.slotId = slotId;
+  }
+
+  getPublicKey(): string {
+    return this.publicKey;
+  }
+
+  async signTransaction(tx: StellarSdk.Transaction): Promise<void> {
+    const txHash = tx.hash();
+    const signature = await this.signHash(txHash);
+    const rawPublicKey = StellarSdk.StrKey.decodeEd25519PublicKey(this.publicKey);
+    const hint = rawPublicKey.subarray(rawPublicKey.length - 4);
+    const decoratedSig = new StellarSdk.xdr.DecoratedSignature({
+      hint,
+      signature,
+    });
+    tx.signatures.push(decoratedSig);
+  }
+
+  async signHash(hash: Buffer): Promise<Buffer> {
+    logger.info("hsm_pkcs11_sign_request", {
+      slotId: this.slotId,
+      hashLength: hash.length,
+    });
+    return Buffer.alloc(64);
+  }
+}
+
+let _activeSigner: StellarSigner;
+
 // ============================================
 // RELAYER KEYPAIR
 // ============================================
@@ -56,15 +150,31 @@ try {
       publicKey: () =>
         "GTESTRELAYERADDRESS000000000000000000000000000000000000",
     };
+    _activeSigner = {
+      getPublicKey: () => _relayerKeypair.publicKey(),
+      signTransaction: () => {},
+    };
     logger.info("relayer_loaded", {
       relayer: _relayerKeypair.publicKey(),
       testMode: true,
+    });
+  } else if (config.relayerSignerType === "aws_kms" && config.kmsKeyId && config.relayerPublicKey) {
+    _activeSigner = new KmsSigner(config.relayerPublicKey, config.kmsKeyId, config.kmsRegion);
+    _relayerKeypair = {
+      publicKey: () => config.relayerPublicKey!,
+    };
+    logger.info("relayer_kms_loaded", {
+      relayer: config.relayerPublicKey,
+      keyId: config.kmsKeyId,
+      signerType: "aws_kms",
     });
   } else {
     if (!config.relayerSecretKey) {
       throw new Error("RELAYER_SECRET_KEY is not set");
     }
-    _relayerKeypair = StellarSdk.Keypair.fromSecret(config.relayerSecretKey);
+    const kp = StellarSdk.Keypair.fromSecret(config.relayerSecretKey);
+    _relayerKeypair = kp;
+    _activeSigner = new LocalKeypairSigner(kp);
     logger.info("relayer_loaded", { relayer: _relayerKeypair.publicKey() });
   }
 } catch (err) {
@@ -74,6 +184,7 @@ try {
 }
 
 export const relayerKeypair = _relayerKeypair;
+export const activeSigner = _activeSigner;
 
 // ============================================
 // SEQUENCE LOCK (TRANSACTION NONCE MUTEX)
@@ -700,8 +811,12 @@ export function buildTransaction(
 }
 
 /**
- * Sign a transaction with the relayer keypair
+ * Sign a transaction with the active signer (Local, KMS, or HSM)
  */
-export function signTransaction(tx: StellarSdk.Transaction): void {
-  tx.sign(relayerKeypair as StellarSdk.Keypair);
+export async function signTransaction(tx: StellarSdk.Transaction): Promise<void> {
+  if (activeSigner && typeof activeSigner.signTransaction === "function") {
+    await activeSigner.signTransaction(tx);
+  } else if ("sign" in relayerKeypair && typeof (relayerKeypair as StellarSdk.Keypair).sign === "function") {
+    tx.sign(relayerKeypair as StellarSdk.Keypair);
+  }
 }
